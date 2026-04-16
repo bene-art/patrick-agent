@@ -19,7 +19,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("patrick_eval_nightly")
 
-BENAI_ROOT = Path.home() / "delta-orchestrator"
+BENAI_ROOT = Path.home() / "patrick-agent"
 HISTORY_PATH = Path.home() / ".benai_local" / "logs" / "patrick_eval_history.jsonl"
 BASELINE = 0.9651  # v5c + scorer hygiene (2026-04-09)
 REGRESSION_THRESHOLD = 0.01

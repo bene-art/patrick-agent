@@ -19,7 +19,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path.home() / ".delta-orchestrator" / "conversation_memory.db"
+DB_PATH = Path.home() / ".patrick-agent" / "conversation_memory.db"
 MAX_HISTORY = 20  # 20 entries = 10 exchanges (user + assistant each)
 
 

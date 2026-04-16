@@ -358,7 +358,7 @@ async def _route_file_write(message: str) -> str:
     identity_ctx = ""
     try:
         identity_ctx = await file_read(
-            str(Path.home() / "delta-orchestrator" / "identity" / "IDENTITY.md")
+            str(Path.home() / "patrick-agent" / "identity" / "IDENTITY.md")
         )
     except Exception:
         pass
@@ -372,7 +372,7 @@ async def _route_file_write(message: str) -> str:
 
     if "project summar" in ml:
         return await cloud_write_file(
-            path="06_Project_Summaries/delta-orchestrator.md",
+            path="06_Project_Summaries/patrick-agent.md",
             instruction=message,
             context=identity_ctx,
         )

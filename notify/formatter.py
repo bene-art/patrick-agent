@@ -16,7 +16,7 @@ Tier 3 — Alert:    Urgent interrupt. Capital-critical failures,
                     error context + action line.
 
 Usage:
-    from delta_orchestrator.notify.formatter import fmt_report, fmt_alert
+    from patrick_agent.notify.formatter import fmt_report, fmt_alert
 
     # Tier 2 — structured report
     text = fmt_report(
@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from delta_orchestrator.notify.base import Severity
+from patrick_agent.notify.base import Severity
 
 # ── Severity → emoji mapping ──────────────────────────────────────────
 _ALERT_ICON: dict[Severity, str] = {

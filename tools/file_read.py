@@ -14,8 +14,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-BENAI_ROOT = Path.home() / "delta-orchestrator"
-BENAI_LOCAL = Path.home() / ".delta-orchestrator"
+BENAI_ROOT = Path.home() / "patrick-agent"
+BENAI_LOCAL = Path.home() / ".patrick-agent"
 MASTER_PLAN = Path.home() / "Desktop" / "project-docs"
 
 # Allowed directory roots — Patrick can read these

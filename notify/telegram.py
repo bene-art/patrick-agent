@@ -11,7 +11,7 @@ import logging
 import sys
 from pathlib import Path
 
-from delta_orchestrator.notify.base import (
+from patrick_agent.notify.base import (
     Channel,
     ChannelConfig,
     ChannelFormat,
@@ -23,7 +23,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _load_pat_tg():
-    """Lazy import pat_tg from scripts/. Keeps delta_orchestrator import-time clean."""
+    """Lazy import pat_tg from scripts/. Keeps patrick_agent import-time clean."""
     scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
@@ -67,7 +67,7 @@ class TelegramChannel(Channel):
         if severity is not None and severity in (
             Severity.CAPITAL_CRITICAL, Severity.HIGH
         ):
-            from delta_orchestrator.notify.formatter import fmt_alert
+            from patrick_agent.notify.formatter import fmt_alert
             text = fmt_alert(title=title, error=body, severity=severity)
         else:
             text = f"{title}\n\n{body}" if title else body

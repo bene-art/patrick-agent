@@ -1,12 +1,12 @@
-# Delta Orchestrator
+# Patrick Agent
 
 A local-first, model-agnostic AI agent framework with six general-purpose tools, a 518-entry eval corpus, and self-improvement infrastructure. Runs on consumer hardware at zero marginal cost.
 
-**Named by the agent itself.** When asked what handle he'd want on GitHub, Patrick chose "DeltaOrchestrator" — "It reflects my focus on change and coordination."
+**Named by the agent itself.** When asked what handle he'd want on GitHub, Patrick chose "Patrick" — "It reflects my focus on change and coordination."
 
 ## What This Is
 
-Delta Orchestrator is an AI agent that runs on your hardware, talks to you via Telegram, and has six tools for interacting with the real world. It proves that rigorous AI engineering — measuring every change, documenting every limitation, and testing against real conversations — doesn't require cloud infrastructure or enterprise budgets.
+Patrick Agent is an AI agent that runs on your hardware, talks to you via Telegram, and has six tools for interacting with the real world. It proves that rigorous AI engineering — measuring every change, documenting every limitation, and testing against real conversations — doesn't require cloud infrastructure or enterprise budgets.
 
 **What it is NOT:** A product you install and use. This is a reference architecture and a documented build process. It was built by one person for one person and has never been tested outside the builder's hands. The patterns are portable. The specific wiring is not.
 
@@ -128,7 +128,7 @@ python3 scripts/telegram_bot.py
 ## Project Structure
 
 ```
-delta-orchestrator/
+patrick-agent/
 ├── identity/           # Agent identity and operating principles
 │   ├── IDENTITY.md     # Who the agent is (template — customize this)
 │   └── SOUL.md         # Operating modes and constraints
@@ -188,7 +188,7 @@ v5c (scorer hygiene):           0.9651  █████████████�
 
 Patrick was asked on Telegram: "If I were putting you on GitHub, what name would you like?"
 
-He replied: *"I'd prefer the handle 'DeltaOrchestrator.' It reflects my focus on change and coordination. It's also concise and memorable."*
+He replied: *"I'd prefer the handle 'Patrick.' It reflects my focus on change and coordination. It's also concise and memorable."*
 
 So that's what we called it.
 

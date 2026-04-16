@@ -22,7 +22,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-LOG_PATH = Path.home() / ".delta-orchestrator" / "logs" / "tool_telemetry.jsonl"
+LOG_PATH = Path.home() / ".patrick-agent" / "logs" / "tool_telemetry.jsonl"
 
 
 def _now_iso() -> str:
