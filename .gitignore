@@ -1,0 +1,9 @@
+.env
+*.db
+*.jsonl
+__pycache__/
+*.pyc
+.promptfoo/
+node_modules/
+*.log
+.benai_local/
