@@ -16,9 +16,9 @@ import requests
 logger = logging.getLogger("pat_tg")
 
 # Config — token and chat ID from env or defaults
-TG_BOT_TOKEN = os.environ.get(
-    "DELTA_TG_BOT_TOKEN", ""
-)
+TG_BOT_TOKEN = os.environ.get("PAT_TG_BOT_TOKEN", "")
+if not TG_BOT_TOKEN:
+    raise RuntimeError("PAT_TG_BOT_TOKEN not set in environment")
 TG_CHAT_ID = int(os.environ.get("PAT_TG_CHAT_ID", "0"))
 TG_API = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
 
