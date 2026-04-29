@@ -1,5 +1,7 @@
 # Patrick Agent
 
+[![CI](https://github.com/bene-art/patrick-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/bene-art/patrick-agent/actions/workflows/ci.yml)
+
 A local-first, model-agnostic AI agent framework with six general-purpose tools, a 518-entry eval corpus, and self-improvement infrastructure. Runs on consumer hardware at zero marginal cost.
 
 **Named by the agent itself.** When asked what handle he'd want on GitHub, Patrick chose "Patrick" — "It reflects my focus on change and coordination."
