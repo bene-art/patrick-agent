@@ -14,29 +14,27 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-BENAI_ROOT = Path.home() / "patrick-agent"
-BENAI_LOCAL = Path.home() / ".patrick-agent"
-MASTER_PLAN = Path.home() / "Desktop" / "project-docs"
+BENAI_LOCAL = Path.home() / ".benai_local"
+PATRICK_REPO = Path.home() / "projects" / "patrick-agent"
+BENAI_REPO = Path.home() / "BenAi_Local"
+
+# Canonical files Patrick consults for "what's going on" questions:
+#   PATRICK_STATUS.md — live deterministic snapshot, written 7:45 AM daily
+#   BenAi_Master_Plan_2026.md — single-file master plan (architectural intent)
+# Both live under BENAI_LOCAL and are covered by the directory grant below.
 
 # Allowed directory roots — Patrick can read these
 ALLOWED_ROOTS: list[Path] = [
-    BENAI_LOCAL / "reports",           # Morning reports, pick reports
-    BENAI_ROOT / "identity" / "outbox",  # Weekly intel, bridge reports
-    BENAI_ROOT / "config",             # YAML configs (non-secret)
-    BENAI_ROOT / "data" / "eval" / "results",  # Eval results
-    BENAI_LOCAL / "logs",              # Logs
-    BENAI_ROOT / "identity" / "IDENTITY.md",  # Patrick's own identity
-    BENAI_ROOT / "identity" / "SOUL.md",      # Patrick's soul
-    MASTER_PLAN,                       # Master Plan docs (read + write sandbox)
+    BENAI_LOCAL,                                 # PATRICK_STATUS.md, Master Plan, reports, logs
+    PATRICK_REPO / "identity",                   # IDENTITY.md, SOUL.md, outbox
+    PATRICK_REPO / "config",                     # YAML configs (non-secret)
+    BENAI_REPO / "data" / "eval" / "results",    # Eval results
 ]
 
 # Directories Patrick can WRITE to (subset of readable)
 WRITABLE_ROOTS: list[Path] = [
-    MASTER_PLAN,                       # Safe sandbox for proving file write
-    BENAI_LOCAL / "reports",           # Can generate reports
-    MASTER_PLAN / "05_Logs_and_Notes", # Activity logs
-    MASTER_PLAN / "06_Project_Summaries",
-    MASTER_PLAN / "07_Agents",
+    BENAI_LOCAL / "reports",                     # Generated reports
+    BENAI_LOCAL / "logs",                        # Activity logs
 ]
 
 # Blocked patterns — never read these
@@ -77,12 +75,14 @@ async def file_read(path_str: str) -> str:
     Returns:
         File contents (capped at MAX_CHARS) or error message.
     """
-    # Resolve the path — try multiple bases
-    path = Path(path_str)
+    # Resolve the path — try multiple bases. ~/-prefixed paths are
+    # expanded first so absolute and tilde-form requests share a path.
+    path = Path(path_str).expanduser()
     candidates = [
         path,
-        BENAI_ROOT / path,
         BENAI_LOCAL / path,
+        BENAI_REPO / path,
+        PATRICK_REPO / path,
     ]
 
     resolved = None
@@ -119,8 +119,8 @@ async def list_files(directory: str) -> str:
     Returns:
         File listing or error message.
     """
-    path = Path(directory)
-    candidates = [path, BENAI_ROOT / path, BENAI_LOCAL / path]
+    path = Path(directory).expanduser()
+    candidates = [path, BENAI_LOCAL / path, BENAI_REPO / path, PATRICK_REPO / path]
 
     resolved = None
     for candidate in candidates:
@@ -167,8 +167,8 @@ async def file_write(path_str: str, content: str) -> str:
     Returns:
         Success message or error.
     """
-    path = Path(path_str)
-    candidates = [path, MASTER_PLAN / path, BENAI_ROOT / path, BENAI_LOCAL / path]
+    path = Path(path_str).expanduser()
+    candidates = [path, BENAI_LOCAL / path, BENAI_REPO / path, PATRICK_REPO / path]
 
     # For new files, use the first candidate whose parent exists
     resolved = None

@@ -78,6 +78,10 @@ _FILE_READ_PATTERNS = [
     # Master Plan docs
     r"(?i)(?:show|read|what's in)\s+(?:me )?(?:the |patrick'?s? )?(?:master plan|project summar|agent status|patrick status)",
     r"(?i)(?:master plan|agent status|project summar)",
+    # Daily / recent work summary — routes to PATRICK_STATUS.md
+    r"(?i)(?:summari[sz]e|recap|tldr)\s+(?:what\s+)?(?:i|we|you)\s+(?:worked on|did|got done|shipped)\s+(?:today|this week|recently|yesterday)",
+    r"(?i)what\s+(?:did|have)\s+(?:i|we|you)\s+(?:work(?:ed)? on|do(?:ne)?|ship(?:ped)?|finish(?:ed)?)\s+(?:today|this week|recently|yesterday)",
+    r"(?i)(?:today'?s?|this week'?s?|recent)\s+(?:work|progress|wins|accomplishments|activity)",
 ]
 
 _API_CALL_PATTERNS = [
@@ -357,9 +361,7 @@ async def _route_file_write(message: str) -> str:
     # Load Patrick's current identity as context for accurate writes
     identity_ctx = ""
     try:
-        identity_ctx = await file_read(
-            str(Path.home() / "patrick-agent" / "identity" / "IDENTITY.md")
-        )
+        identity_ctx = await file_read("identity/IDENTITY.md")
     except Exception:
         pass
 
@@ -433,15 +435,45 @@ async def _route_file_read(message: str) -> str:
                 return await file_read(f"data/eval/results/{first_file}")
         return "[no eval results found]"
 
+    # "what did I work on today" → live PATRICK_STATUS snapshot (deterministic,
+    # written 7:45 AM by morning brief launchd). Patrick should ALWAYS read
+    # the live file, never invent a recap.
+    if any(
+        kw in ml
+        for kw in [
+            "worked on today",
+            "worked on this week",
+            "work on today",
+            "did i do today",
+            "did i ship",
+            "did i finish",
+            "today's work",
+            "todays work",
+            "this week's work",
+            "recent work",
+            "summarize today",
+            "summarise today",
+            "summarize this week",
+            "summarise this week",
+            "recap today",
+            "tldr today",
+            "today's progress",
+            "today's activity",
+        ]
+    ):
+        return await file_read("~/.benai_local/PATRICK_STATUS.md")
+
+    # Master Plan: single canonical file (legacy Desktop snapshot retired).
     if any(w in ml for w in ["master plan"]):
-        return await file_read(str(Path.home() / "Desktop/project-docs/project-docs.md"))
+        return await file_read("~/.benai_local/BenAi_Master_Plan_2026.md")
 
+    # Agent / Patrick status → live deterministic file
     if any(w in ml for w in ["agent status", "patrick status", "patrick's status"]):
-        return await file_read(str(Path.home() / "Desktop/project-docs/07_Agents/Patrick/STATUS.md"))
+        return await file_read("~/.benai_local/PATRICK_STATUS.md")
 
+    # Project summaries are now folded into the Master Plan.
     if any(w in ml for w in ["project summar"]):
-        listing = await list_files(str(Path.home() / "Desktop/project-docs/06_Project_Summaries"))
-        return listing if listing else "[no project summaries found]"
+        return await file_read("~/.benai_local/BenAi_Master_Plan_2026.md")
 
     if "config" in ml:
         # Try to find the specific config mentioned
