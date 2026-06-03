@@ -2,23 +2,21 @@
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                                                                      ║
 ║         PATRICK OPERATIONS WHITE PAPER                               ║
-║         Operational AI Agent Kernel for BenAi Local                  ║
+║         A Local-First AI Agent Reference Architecture                ║
 ║                                                                      ║
 ║         Version:        2.0                                          ║
 ║         Date:           April 2026                                   ║
 ║         Author:         Benjamin Easington                           ║
-║         Classification: Internal / Portfolio                         ║
-║         Source:         ~/BenAi_Local/ops_clawd/                     ║
 ║         Model:          gemma3:12b (local, cloud-escalated for tools) ║
-║         Eval Baseline:  0.9651 keyword (518 entries, clean)          ║
-║                         ~97% semantic (partial — see Honesty Notes)  ║
 ║         Tools:          6, regex-routed (not intent-classified)      ║
-║         Eval Corpus:    518 entries, Promptfoo + custom scorer       ║
+║         Eval Corpus:    Built incrementally, Promptfoo + custom scorer║
 ║                                                                      ║
 ║         "Execute. Verify. Log."                                      ║
 ║                                                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 ```
+
+> **Update note (June 2026):** The specific numbers in this paper (0.9651 keyword score, 518-entry corpus, "nightly eval at 3 AM") are accurate for the April 2026 snapshot. The corpus has since been pruned to a smaller high-signal subset, the nightly eval is currently disabled, and the IDENTITY/SOUL templates have been simplified. The engineering patterns documented here are stable — treat the absolute numbers as a time-stamped checkpoint, not a current report.
 
 ---
 
@@ -98,8 +96,8 @@ The gemma3:12b model consumes 9.5 GB of unified memory on Apple Silicon. On a 16
 **Solution:** Per-model `keep_alive` management. Patrick's 12b is pinned for 2 hours via the Ollama API's per-request `keep_alive` parameter. Specialist models (gemma2:2b) use the server default of 5 minutes and auto-unload. This ensures Patrick's brain stays resident while specialists load, execute, and release.
 
 ```python
-# model_registry.py
-"benai_core_12b": ModelConfig(
+# model_registry.py — illustrative
+"patrick_core_12b": ModelConfig(
     model="gemma3:12b",
     keep_alive="2h",     # Patrick stays pinned
     ...
@@ -165,7 +163,7 @@ user_msg = raw + tool_context if tool_context else raw
 | Shell exec | 0.967 | safe | 14 allowlisted read-only commands, no restarts/kills |
 | API call | 1.000 | safe | Alpaca paper trading + The Odds API, read-only |
 
-**Control group accuracy:** 0.982 across 28 entries. Near-zero false triggers on BenAi-internal questions that should NOT invoke tools.
+**Control group accuracy:** 0.982 across 28 entries. Near-zero false triggers on agent-internal questions (about identity, architecture, tooling) that should NOT invoke tools.
 
 ### Web Search: Gemini as Patrick's Eyes
 
@@ -173,19 +171,19 @@ Patrick cannot browse the internet. But he can ask Gemini Flash (with Google Sea
 
 **Cost:** Free tier (15 RPM, 1M TPM). At ~50-100 Telegram messages per day, Patrick never approaches the limit for conversational web search. Eval runs (518 entries) do hit rate limits — paid tier ($0.02 per full run) eliminates this.
 
-**Fallback logic:** If no regex pattern matches but the message looks like an external question (starts with a question word, doesn't mention BenAi internals, length > 10 chars), the router automatically searches the web. This catches natural phrasing that explicit patterns miss.
+**Fallback logic:** If no regex pattern matches but the message looks like an external question (starts with a question word, doesn't mention agent internals, length > 10 chars), the router automatically searches the web. This catches natural phrasing that explicit patterns miss.
 
 ```python
 # tool_router.py — web search fallback
 is_question = any(ml.startswith(q) for q in ["what", "who", "where", ...])
-is_internal = any(kw in ml for kw in {"benai", "patrick", "scout", ...})
+is_internal = any(kw in ml for kw in {"patrick", "agent", "architecture", ...})
 if is_question and not is_internal and len(message) > 10:
     result = await web_search(message)
 ```
 
 ### Database Read: Patrick Queries His Own Data
 
-Patrick can execute read-only SQLite queries against known BenAi databases: picks.db, calibration.db, sports_betting.db, memory.db, marketing.db, discovery.db, health_ledger.db.
+Patrick can execute read-only SQLite queries against a configurable allowlist of SQLite databases. The allowlist is loaded from `config/databases.yaml` or the `AGENT_DBS` env var; both default to empty so the tool is inert until you opt in. A typical configuration includes domain databases like `picks.db`, `calibration.db`, or whatever your agent's data layer exposes.
 
 **Safety:** Hard blocklist on DDL/DML keywords (DROP, DELETE, UPDATE, INSERT, ALTER, CREATE). `PRAGMA query_only = ON` enforced at connection level. Even if a query somehow bypasses the keyword check, SQLite itself rejects writes.
 
@@ -199,30 +197,29 @@ Patrick's 12b brain can't generate content AND call a write function in one pass
 4. System executes the write
 5. Confirmation injected as [SYSTEM DATA] for Patrick to relay
 
-**Scope:** Currently limited to `~/Desktop/BenAi_Master_Plan_2026/`. This directory is Patrick's proving ground for write operations — safe sandbox where the worst case is a bad markdown file.
+**Scope:** Writes are limited to `$AGENT_DATA_DIR` (default `~/.patrick-agent`). The agent can write under `reports/` and `logs/` only; everything else is blocked at the path-resolution layer. Safe sandbox — worst case is a bad markdown file.
 
 ### Shell Exec: Allowlisted Read-Only Commands
 
-14 commands, hardcoded. No configuration can add commands at runtime.
+A dozen commands, hardcoded. No configuration can add commands at runtime. Paths that point at filesystem locations (git repo, launchd prefix) are parameterized via env vars.
 
 ```python
 SAFE_COMMANDS = {
-    "ollama_ps":     ("ollama ps", ...),
-    "disk_space":    ("df -h", ...),
-    "memory":        ("vm_stat", ...),
-    "uptime":        ("uptime", ...),
-    "top_mem":       ("top -l 1 -o mem -n 10 ...", ...),
-    "launchd_benai": ("launchctl list | grep benai", ...),
-    "ports":         ("lsof -iTCP ...", ...),
-    "git_status":    ("git -C ~/BenAi_Local status --short", ...),
-    "git_log":       ("git -C ~/BenAi_Local log --oneline -10", ...),
-    "python_procs":  ("ps aux | grep python ...", ...),
-    "health_ledger": ("sqlite3 ... SELECT ...", ...),
+    "ollama_ps":    ("ollama ps", ...),
+    "disk_space":   ("df -h", ...),
+    "memory":       ("vm_stat", ...),
+    "uptime":       ("uptime", ...),
+    "top_mem":      ("top -l 1 -o mem -n 10 ...", ...),
+    "launchd_jobs": (f"launchctl list | grep -i {LAUNCHD_PREFIX}", ...),
+    "ports":        ("lsof -iTCP -sTCP:LISTEN ...", ...),
+    "git_status":   (f"git -C {AGENT_REPO_DIR} status --short", ...),
+    "git_log":      (f"git -C {AGENT_REPO_DIR} log --oneline -10", ...),
+    "python_procs": ("ps aux | grep python ...", ...),
     ...
 }
 ```
 
-**Future:** Medium-risk commands (restarts, service control) will require Commander approval via Telegram before execution. The governance model already supports this through the risk-level framework in CLAUDE.md.
+**Future:** Medium-risk commands (restarts, service control) will require operator approval via Telegram before execution. The governance model supports this through a six-level risk taxonomy (safe → low → medium → high → capital-critical → doctrine-touching).
 
 ## Tool Chaining
 
@@ -337,7 +334,7 @@ Patrick stores the last 20 messages (10 exchanges) per thread in SQLite, survivi
 ```python
 # conversation_memory.py
 class ConversationMemory:
-    DB_PATH = ~/.benai_local/conversation_memory.db
+    DB_PATH = ~/.patrick-agent/conversation_memory.db
     MAX_HISTORY = 20  # 10 exchanges (user + assistant each)
 ```
 
@@ -345,7 +342,7 @@ class ConversationMemory:
 
 ## Production Telemetry
 
-Every tool invocation is logged to `~/.benai_local/logs/tool_telemetry.jsonl`:
+Every tool invocation is logged to `$AGENT_DATA_DIR/logs/tool_telemetry.jsonl` (default `~/.patrick-agent/logs/`):
 
 ```json
 {
@@ -389,13 +386,14 @@ Messages from Patrick follow a visual hierarchy so Commander can identify messag
 
 **Tier 1 — Chat:** No formatting. Natural conversation. "Autoresearch is progressing steadily..." Handled by `pat_tg_loop.py`, no formatter involved.
 
-**Tier 2 — Reports:** Structured, scannable. `📊` header + labeled bullet sections + job health footer. Used for Captain's Brief, overnight summaries, autoresearch results.
+**Tier 2 — Reports:** Structured, scannable. `📊` header + labeled bullet sections + job health footer. Used for daily briefs, overnight summaries, autoresearch results.
 
 ```
-📊 Captain's Brief — Apr 14
+📊 Morning Brief — Apr 14
 
-Brief: Scout shows edge in NBA tonight. Pulse portfolio stable.
-Mkt has 2 drafts queued.
+Markets: S&P +0.4%, NASDAQ +0.7%
+Portfolio: Stable. No thesis violations.
+Tasks:   2 drafts queued, awaiting approval.
 
 ✅ All 13 jobs green
 ```
@@ -405,7 +403,7 @@ Mkt has 2 drafts queued.
 ```
 🚨 Stock Trading — FAILURE
 
-Job: com.benai.stock-trading
+Job: com.example.stock-trading
 Time: 09:35 CT
 Error: Alpaca API connection refused
 
@@ -414,7 +412,7 @@ Action: Check Alpaca credentials
 
 ## First Officer Routing
 
-Patrick decides what reaches Commander's phone and when:
+Patrick decides what reaches the operator's phone and when:
 
 | Severity | Action | Time constraint |
 |----------|--------|-----------------|
@@ -424,7 +422,7 @@ Patrick decides what reaches Commander's phone and when:
 | MEDIUM | Morning brief only | Never interrupts |
 | LOW / SAFE | Log only | Never Telegram |
 
-13 launchd jobs are wrapped with failure notifications. 4 watchdogs have direct Telegram/email alerting. Everything else waits for Patrick's morning briefing.
+Wrap launchd / cron jobs with failure notifications and route watchdog triggers through this severity table. Everything else folds into the morning briefing.
 
 ---
 
@@ -432,7 +430,7 @@ Patrick decides what reaches Commander's phone and when:
 
 ## Autoresearch
 
-Autoresearch is BenAi's system for automated experimentation. It runs twice daily (08:30 AM, 08:30 PM) via launchd, testing candidate configurations against baselines across registered surfaces.
+Autoresearch is an automated experimentation system that runs twice daily via launchd, testing candidate configurations against baselines across registered surfaces.
 
 ### How It Works
 
@@ -454,7 +452,7 @@ Five new surfaces registered for the tool pipeline, all Class A (numeric, auto-a
 | `tools.db_query_max_rows` | 20 | 5-50 | Database query result cap |
 | `tools.web_search_max_tokens` | 400 | 200-800 | Web search result length |
 
-**Evaluator:** `ToolAccuracyEvaluator` runs tool test cases from the eval corpus through the full pipeline (tool_router → injection → os_agent_chat) and measures pass rate.
+**Evaluator:** `ToolAccuracyEvaluator` runs tool test cases from the eval corpus through the full pipeline (tool_router → [SYSTEM DATA] injection → Ollama chat) and measures pass rate.
 
 ### Scoring and Promotion
 
@@ -464,18 +462,20 @@ A candidate is promotable when:
 - System health gates pass
 - Confidence ≥ 65% (minimum 13 samples)
 
-Class A surfaces auto-promote without Commander approval. Class B surfaces (prompt variants) require manual review.
+Class A surfaces auto-promote without human approval. Class B surfaces (prompt variants) require manual review.
 
 **Total surfaces:** 19 (14 original + 5 tool surfaces). Categories: rag, routing, intelligence, memory, tools, coding, reporting, error_recovery.
 
 ## Nightly Eval
 
-`patrick_eval_nightly.py` runs at 3:00 AM daily via launchd. It:
-1. Runs the full eval (`eval_patrick.py`) against the 518-entry corpus
-2. Logs the score to `~/.benai_local/logs/patrick_eval_history.jsonl`
-3. If regression > 0.01 from baseline (0.9651), sends a Tier 3 Telegram alert
+`scripts/nightly_eval.py` is designed to run at a quiet hour (e.g. 3 AM) via launchd or cron. It:
+1. Runs the full eval (`eval/eval_agent.py`) against the corpus you've curated
+2. Logs the score to `$AGENT_DATA_DIR/logs/patrick_eval_history.jsonl`
+3. If regression exceeds `REGRESSION_THRESHOLD` from baseline, sends a Tier 3 Telegram alert
 
-This catches model drift, prompt regressions, and tool pipeline degradation before Commander notices.
+This catches model drift, prompt regressions, and tool pipeline degradation before the operator notices.
+
+**Status note:** The nightly eval ran daily through April 2026 against a 518-entry corpus with a 0.9651 keyword baseline. The corpus was subsequently pruned to a smaller high-signal subset; the nightly schedule is currently disabled while the corpus stabilizes. The script remains in the repo as a template for the regression-detection pattern.
 
 ---
 
@@ -525,7 +525,7 @@ The Mac mini M4 with 16 GB is sufficient but not comfortable:
 
 2. **Paraphrasing instead of precision.** The 12b model says "database" instead of "SQLite", "scheduled tasks" instead of "launchd". Eval scores are ~3% lower than they would be with a larger model that uses precise terminology.
 
-3. **Pretraining override.** In rare cases (~0.5%), the model's pretraining knowledge overrides the system prompt. Example: mentioning "college football" despite being told Scout covers NBA, MLB, NHL only. The system prompt says NOT to, but the model's latent associations occasionally leak.
+3. **Pretraining override.** In rare cases (~0.5%), the model's pretraining knowledge overrides the system prompt. Example: mentioning "college football" despite being told the agent only covers NBA, MLB, NHL. The system prompt says NOT to, but the model's latent associations occasionally leak.
 
 4. **~20 second response latency.** gemma3:12b on M4 takes ~20s per response. Acceptable for Telegram (async), problematic if real-time interaction is needed.
 
@@ -539,7 +539,7 @@ The Mac mini M4 with 16 GB is sufficient but not comfortable:
 
 ## Infrastructure Limitations
 
-1. **Single point of failure.** One Mac mini. No redundancy. If the hardware fails, Patrick goes down entirely. The vault backup (weekly HDD mirror) provides data recovery but not service continuity.
+1. **Single point of failure.** One Mac mini. No redundancy. If the hardware fails, Patrick goes down entirely. A backup tier (e.g. NVMe rolling snapshots) provides data recovery but not service continuity.
 
 2. **No multi-turn tool use.** Tools fire once at message receipt. Patrick cannot say "I need more information, let me search again" mid-response. Each message gets one round of tool execution.
 
@@ -561,19 +561,19 @@ This scales to 20+ tools without exponential pattern growth. The telemetry data 
 
 ### Tool Chaining Depth
 
-Currently: one round of tool execution per message. Future: iterative tool use where Patrick can request additional information based on initial results. Example: "Find the best pick for tonight" → search web for games → query odds API → query picks.db for historical performance → synthesize recommendation.
+Currently: one round of tool execution per message. Future: iterative tool use where Patrick can request additional information based on initial results. Example: "Find the best pick for tonight" → search web for games → query odds API → query the picks database for historical performance → synthesize recommendation.
 
 This requires conversation-level tool state, not just message-level injection.
 
 ### Expand Write Scope
 
-Currently: file write is limited to `~/Desktop/BenAi_Master_Plan_2026/`. The next proving ground: let Patrick update his own eval corpus entries based on production telemetry. When he encounters a question he can't answer, he proposes a new test case. Self-improving evaluation.
+Currently: file write is limited to `$AGENT_DATA_DIR/reports` and `$AGENT_DATA_DIR/logs`. The next proving ground: let Patrick update his own eval corpus entries based on production telemetry. When he encounters a question he can't answer, he proposes a new test case. Self-improving evaluation.
 
 ## Medium-Term (Months)
 
-### Commander Approval via Telegram
+### Operator Approval via Telegram
 
-Medium-risk shell commands (service restarts, config changes) presented to Commander on Telegram with approve/reject buttons. Patrick proposes the action, Commander taps approve, Patrick executes. This extends the tool system from read-only observation to governed action.
+Medium-risk shell commands (service restarts, config changes) presented to the operator on Telegram with approve/reject buttons. Patrick proposes the action, the operator taps approve, Patrick executes. This extends the tool system from read-only observation to governed action.
 
 ### Hardware Evaluation
 
@@ -581,7 +581,7 @@ If autoresearch data shows consistent GPU memory pressure or latency bottlenecks
 
 ### Multi-Agent Tool Sharing
 
-Scout, Pulse, and Mkt currently have no tools — they're 2b models that receive dispatch-crafted sub-queries and return text. Sharing Patrick's tool system (web search, database read) with specialists would let them access real-time data during their analysis. The tool router architecture already supports this — the tools are standalone functions, not tied to Patrick's chat path.
+Specialist agents (smaller models that receive dispatch-crafted sub-queries and return text) currently have no tools. Sharing Patrick's tool system (web search, database read) with specialists would let them access real-time data during their analysis. The tool router architecture already supports this — the tools are standalone functions, not tied to Patrick's chat path.
 
 ## Long-Term (As Technology Progresses)
 
@@ -593,7 +593,7 @@ The Ollama ecosystem is improving rapidly. gemma3:12b is the best model that fit
 - Local models approach cloud model quality for conversation and tool use
 - Native tool calling support in local models eliminates the regex router entirely
 
-Patrick's architecture is model-agnostic. The eval harness measures any model against the same 518 entries. Swapping gemma3:12b for a future local model is one config change + one eval run. If the number goes up, ship it. If not, revert.
+Patrick's architecture is model-agnostic. The eval harness measures any model against the same corpus. Swapping gemma3:12b for a future local model is one config change + one eval run. If the number goes up, ship it. If not, revert.
 
 ### On-Device Fine-Tuning
 
@@ -605,13 +605,13 @@ When local fine-tuning becomes practical on Apple Silicon (LoRA/QLoRA on M4):
 
 ### Sovereign AI as Product — Honest Assessment
 
-BenAi is currently a personal tool built by one person for one person. The architecture — local-first agent with governed tools, measured quality, and self-improvement infrastructure — looks like a product pattern. But there's a large gap between "works for the builder" and "works for anyone else."
+Patrick is currently a personal tool built by one person for one person. The architecture — local-first agent with governed tools, measured quality, and self-improvement infrastructure — looks like a product pattern. But there's a large gap between "works for the builder" and "works for anyone else."
 
 **What would need to change for productization:**
-- Tool router patterns are hardcoded for BenAi's specific databases, APIs, and file paths. Zero portability.
-- IDENTITY.md is written for one Commander with specific domain knowledge. A new user would need to rewrite it entirely.
-- The eval corpus tests BenAi-specific knowledge (Scout, Pulse, picks.db). It's not a general agent eval.
-- Deployment requires manual launchd plist management, API key wiring, Ollama configuration. There's no installer.
+- Tool router patterns are hand-written regex tied to one operator's databases, APIs, and file paths. Zero portability out of the box; the public version is parameterized but the *patterns* still encode one person's mental model.
+- IDENTITY.md is written for one operator with specific domain knowledge. A new user would need to rewrite it entirely.
+- The eval corpus tests one operator's domain knowledge. It's not a general agent eval.
+- Deployment requires manual launchd plist management, API key wiring, Ollama configuration. The companion [local-agent-kit](https://github.com/bene-art/local-agent-kit) shrinks this gap, but there's still no installer.
 - The 12b model fits 16 GB only because we carefully manage what else runs. Most users won't audit their memory.
 
 **What is genuinely portable:**
@@ -725,7 +725,7 @@ Budget: 16 GB total
 Patrick (12b, Q4):  9.5 GB resident
 Remaining:          3.5 GB
 
-Scout/Pulse/Mkt (2b): 2.6 GB each
+Specialist (2b, Q4): 2.6 GB each
   - ONE specialist:  9.5 + 2.6 = 12.1 GB  ✓ fits
   - TWO specialists: 9.5 + 5.2 = 14.7 GB  ✗ exceeds budget
   - THREE:           9.5 + 7.8 = 17.3 GB  ✗ impossible
@@ -738,7 +738,7 @@ This is why Patrick can dispatch to one specialist at a time, not three simultan
 - Specialist 2b: 5-minute lease (low frequency, load-use-release)
 - Net effect: specialists time-share the remaining 3.5 GB while Patrick stays resident
 
-Before this fix, all models shared a global 2-hour pin. Three specialists would load during the morning briefing and squat on 7.8 GB for 2 hours, evicting Patrick's 12b. The Commander's next Telegram message would trigger a cold load (5 seconds of disk I/O + 3 seconds of GPU initialization) instead of an instant response.
+Before this fix, all models shared a global 2-hour pin. Three specialists would load during the morning briefing and squat on 7.8 GB for 2 hours, evicting Patrick's 12b. The next Telegram message would trigger a cold load (5 seconds of disk I/O + 3 seconds of GPU initialization) instead of an instant response.
 
 The fix is 4 lines of code and one `keep_alive` field in the model config. The physics problem is solved by respecting the physics instead of fighting it.
 
