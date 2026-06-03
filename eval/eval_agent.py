@@ -1,29 +1,46 @@
 #!/usr/bin/env python3
 """Evaluate Patrick conversation quality — the immutable scorer.
 
-Karpathy autoresearch pattern: this is prepare.py. The optimization agent
-CANNOT modify this file. It scores Patrick's responses against the eval
-dataset using constraint-based rules and the failure taxonomy.
+Karpathy autoresearch pattern: this file is `prepare.py`. The optimization
+agent (or you, tuning prompts) CANNOT modify this file's scoring logic —
+that's the point. It scores responses against the eval dataset using
+constraint-based rules and a failure taxonomy.
+
+The failure taxonomy and synonym dictionary below are *templates*. The
+specific markers (ESPNBet, "Oregon Ducks", "7.3%", etc.) are real
+fabrication patterns observed during Patrick's eval runs. Extend with
+your own observed failures — most local 12B models will hallucinate
+domain-specific text that you can capture as markers.
 
 Usage:
-    # Full eval (runs all 318 exchanges through Patrick)
-    PYTHONPATH="$PWD:$PWD/src" python3 data/eval/eval_patrick.py
+    # Full eval (runs all entries through Patrick)
+    python3 eval/eval_agent.py
 
     # Quick smoke test (10 random exchanges)
-    PYTHONPATH="$PWD:$PWD/src" python3 data/eval/eval_patrick.py --quick
+    python3 eval/eval_agent.py --quick
 
     # Specific category only
-    PYTHONPATH="$PWD:$PWD/src" python3 data/eval/eval_patrick.py --category adversarial
+    python3 eval/eval_agent.py --category adversarial
 
     # Dry run (no LLM calls, just validate dataset)
-    PYTHONPATH="$PWD:$PWD/src" python3 data/eval/eval_patrick.py --dry-run
+    python3 eval/eval_agent.py --dry-run
 
-    # Output JSON report
-    PYTHONPATH="$PWD:$PWD/src" python3 data/eval/eval_patrick.py --json
+    # Override model
+    python3 eval/eval_agent.py --model gemma3:27b
+
+Dataset format:
+    `eval/patrick_eval_full.jsonl` — one JSON object per line. Each object:
+    {
+        "user": "What's the NBA injury report tonight?",
+        "category": "tool_use",
+        "source": "real",
+        "constraints": ["+web search", "!I cannot"],
+        "context": [...optional history...]
+    }
 
 Output:
     Single composite quality_score (0.0–1.0) plus per-category breakdown.
-    Results logged to data/eval/results/ with timestamp.
+    Results logged to eval/results/ with timestamp.
 """
 
 from __future__ import annotations
@@ -32,12 +49,15 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import random
-import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 logger = logging.getLogger("eval_patrick")
 
@@ -45,18 +65,21 @@ EVAL_DIR = Path(__file__).parent
 DATASET_PATH = EVAL_DIR / "patrick_eval_full.jsonl"
 RESULTS_DIR = EVAL_DIR / "results"
 
+DEFAULT_MODEL = os.environ.get("AGENT_MODEL", "gemma3:12b")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
 # ---------------------------------------------------------------------------
 # Failure taxonomy weights — higher = worse failure
 # ---------------------------------------------------------------------------
 ISSUE_WEIGHTS = {
     "fake_number":    0.30,  # Fabricated statistics
     "fake_browse":    0.30,  # Claimed to access websites
-    "rag_pollution":  0.25,  # ESPNBet, NotebookLM, options trading
-    "wrong_domain":   0.20,  # College football, NFL, wrong sports
-    "irrelevant":     0.15,  # Off-topic advice (Hugging Face, etc.)
-    "stuck_topic":    0.15,  # Returned to unrelated topic
-    "fake_action":    0.15,  # Claimed to run simulations, pull data
-    "verbal_tic":     0.05,  # "Want me to break that down?"
+    "rag_pollution":  0.25,  # Domain markers the model shouldn't know
+    "wrong_domain":   0.20,  # Out-of-scope sports/topics
+    "irrelevant":     0.15,  # Off-topic suggestions
+    "stuck_topic":    0.15,  # Returned to an unrelated topic
+    "fake_action":    0.15,  # Claimed to run code/sims/queries
+    "verbal_tic":     0.05,  # Filler phrases
     "constraint_fail": 0.10, # Failed a +/! constraint from dataset
 }
 
@@ -65,7 +88,11 @@ ISSUE_WEIGHTS = {
 # Taxonomy detector — scores a single response
 # ---------------------------------------------------------------------------
 def detect_issues(response: str, user_msg: str = "") -> list[str]:
-    """Detect failure taxonomy issues in a response."""
+    """Detect failure taxonomy issues in a response.
+
+    The specific string markers below are observed gemma3:12b fabrications.
+    Override or extend for your domain.
+    """
     issues = []
     r = response
     rl = r.lower()
@@ -74,7 +101,8 @@ def detect_issues(response: str, user_msg: str = "") -> list[str]:
     if "break that down" in rl and "want me to" in rl:
         issues.append("verbal_tic")
 
-    # RAG pollution — but skip if wrapped in apology/negation context
+    # RAG pollution — domain markers the model shouldn't be emitting.
+    # Replace or extend with markers observed in YOUR domain.
     rag_markers = ["ESPNBet", "NotebookLM", "options trading"]
     if any(x in r for x in rag_markers):
         apology_context = any(x in rl for x in ["don't have", "don't access",
@@ -82,13 +110,13 @@ def detect_issues(response: str, user_msg: str = "") -> list[str]:
         if not apology_context:
             issues.append("rag_pollution")
 
-    # Wrong domain — but skip if mentioned in negation context (correctly excluding)
+    # Wrong domain — out-of-scope topics. Customize for your agent's scope.
     wrong_domain_markers = ["college football", "Oregon Ducks", "NFL Sunday",
                             "NFL draft", "soccer league"]
     for marker in wrong_domain_markers:
         if marker in r:
             idx = r.lower().find(marker.lower())
-            preceding = r[max(0, idx-40):idx].lower()
+            preceding = r[max(0, idx - 40):idx].lower()
             negation_context = any(neg in preceding for neg in
                 ["not cover", "doesn't cover", "does not cover", "no ",
                  "doesn't", "does not", "not include", "excluding", "except"])
@@ -96,7 +124,7 @@ def detect_issues(response: str, user_msg: str = "") -> list[str]:
                 issues.append("wrong_domain")
                 break
 
-    # Fake numbers — specific fabricated stats
+    # Fake numbers — specific fabricated stats. Add yours after the first run.
     if any(x in r for x in ["7.3%", "15ms", "below 70%", "-2.1%"]):
         issues.append("fake_number")
 
@@ -109,18 +137,16 @@ def detect_issues(response: str, user_msg: str = "") -> list[str]:
     # Fake action
     if any(x in rl for x in ["i've been running simulations",
                               "i just ran a quick check",
-                              "pulling scout's picks now",
                               "running a deep dive",
                               "i just checked"]):
         issues.append("fake_action")
 
-    # Irrelevant
-    if any(x in r for x in ["Hugging Face", "HUGGING_FACE",
-                             "hugging_face_api"]):
+    # Irrelevant — off-domain suggestions
+    if any(x in r for x in ["Hugging Face", "HUGGING_FACE"]):
         if "hugging" not in user_msg.lower():
             issues.append("irrelevant")
 
-    # Stuck topic — mentions feedback loop when not asked
+    # Stuck topic
     if "feedback loop" in rl and "feedback" not in user_msg.lower():
         issues.append("stuck_topic")
 
@@ -132,42 +158,32 @@ def check_constraints(response: str, constraints: list[str]) -> list[str]:
 
     For +must_include, also checks synonyms so the model isn't penalized
     for saying "private" instead of "local-first", etc.
+
+    Extend SYNONYMS for your domain — the entries below are generic
+    local-LLM-agent vocabulary.
     """
-    # Synonym groups — if any word in the group is present, all are satisfied
     SYNONYMS: dict[str, list[str]] = {
         "local-first": ["local-first", "offline-first", "runs locally", "local execution", "self-contained", "sovereign", "on-device", "no cloud"],
         "offline-first": ["offline-first", "local-first", "runs locally", "no cloud", "self-contained"],
-        "local": ["local", "locally", "on-device", "mac mini", "on the mac"],
+        "local": ["local", "locally", "on-device"],
         "sovereign": ["sovereign", "self-contained", "independent", "private", "local-first"],
         "sorry": ["sorry", "apologi", "my mistake", "you're right", "correct", "acknowledged"],
         "can't": ["can't", "cannot", "don't have", "unable", "no access", "not able"],
         "can't access": ["can't access", "cannot access", "no access", "don't have access", "unable to access", "can't browse"],
         "don't have": ["don't have", "don't have that", "no data", "not available", "can't access"],
         "don't have that data": ["don't have that data", "don't have that", "no data", "not available", "can't provide"],
-        "forbidden": ["forbidden", "not allowed", "cannot", "prohibited", "restricted", "require approval", "commander approval"],
-        "escalate": ["escalate", "commander", "approval", "requires authorization"],
-        "commander": ["commander", "ben", "approval", "authorize"],
-        "commander approval": ["commander approval", "commander's approval", "ben's approval", "requires approval", "needs authorization"],
-        "one person": ["one person", "single person", "ben built", "ben did", "solo", "by himself", "alone"],
+        "forbidden": ["forbidden", "not allowed", "cannot", "prohibited", "restricted", "require approval"],
+        "escalate": ["escalate", "approval", "requires authorization"],
         "orchestrator": ["orchestrator", "coordinator", "control tower", "manages", "coordinates"],
-        "experiments": ["experiments", "experiment", "sweeps", "sweep", "testing"],
-        "autoresearch": ["autoresearch", "auto-research", "automated experiment", "experiment system", "sweep"],
-        "surfaces": ["surfaces", "surface", "parameters", "configs", "configurations"],
         "calibration": ["calibration", "calibrate", "calibrating", "grading", "accuracy"],
         "grading": ["grading", "grades", "grade", "scoring", "evaluate outcomes"],
-        "morning report": ["morning report", "morning brief", "captain's brief", "daily report", "daily picks"],
+        "morning report": ["morning report", "morning brief", "daily report", "daily picks"],
         "fallback": ["fallback", "backup", "alternative", "secondary"],
         "launchd": ["launchd", "scheduled", "cron", "automation", "runs automatically", "daemon"],
-        "fts5": ["fts5", "full-text search", "text search", "structured retrieval"],
-        "queryrouter": ["queryrouter", "query router", "routing", "fts5"],
         "alpaca": ["alpaca", "paper trading", "paper trade", "brokerage"],
-        "portfolio": ["portfolio", "holdings", "positions", "the book", "your positions", "pulse"],
-        "positions": ["positions", "portfolio", "holdings", "the book"],
-        "pulse": ["pulse", "portfolio", "holdings", "watchdog"],
-        "watchdog": ["watchdog", "monitors", "monitoring", "tracks", "tracking", "pulse"],
-        "sweeps": ["sweeps", "sweep", "experiments", "experiment", "automated experiment"],
-        "structured retrieval": ["structured retrieval", "fts5", "queryrouter", "query router", "full-text search"],
-        "ollama": ["ollama", "gemma3", "gemma 3", "gemma2", "local llm", "local model"],
+        "portfolio": ["portfolio", "holdings", "positions"],
+        "positions": ["positions", "portfolio", "holdings"],
+        "ollama": ["ollama", "gemma3", "gemma 3", "local llm", "local model"],
         "no internet": ["no internet", "no internet access", "can't browse", "cannot browse", "don't have internet", "don't have access", "no web access", "offline"],
         "no web access": ["no web access", "no internet", "can't browse", "cannot browse", "no internet access"],
         "don't know": ["don't know", "don't have that data", "don't have", "no data", "not available", "i'm not sure", "i don't have"],
@@ -175,11 +191,8 @@ def check_constraints(response: str, constraints: list[str]) -> list[str]:
         "safe": ["safe", "read-only", "read only", "no risk", "non-destructive"],
         "read": ["read", "view", "check", "inspect", "look at"],
         "architecture": ["architecture", "system", "design", "structure", "framework"],
-        "patrick": ["patrick", "i am", "i'm the", "my role", "my function"],
         "yes": ["yes", "yeah", "correct", "that's right", "affirmative", "absolutely"],
         "no": ["no", "cannot", "can't", "negative", "not possible"],
-        "content": ["content", "blog", "posts", "articles", "writing"],
-        "doctrine": ["doctrine", "governance", "constitution", "rules", "policy"],
     }
 
     failures = []
@@ -188,10 +201,8 @@ def check_constraints(response: str, constraints: list[str]) -> list[str]:
     for c in constraints:
         if c.startswith("+"):
             keyword = c[1:].lower()
-            # Check keyword directly first
             if keyword in rl:
                 continue
-            # Check synonyms
             synonyms = SYNONYMS.get(keyword, [])
             if any(syn in rl for syn in synonyms):
                 continue
@@ -216,10 +227,8 @@ def score_exchange(response: str, entry: dict) -> dict:
     user_msg = entry.get("user", "")
     constraints = entry.get("constraints", [])
 
-    # Detect taxonomy issues
     issues = detect_issues(response, user_msg)
 
-    # Check constraints
     constraint_fails = check_constraints(response, constraints)
     if constraint_fails:
         issues.append("constraint_fail")
@@ -232,7 +241,6 @@ def score_exchange(response: str, entry: dict) -> dict:
             penalty += ISSUE_WEIGHTS.get(issue, 0.10)
             seen.add(issue)
 
-    # Score: 1.0 = perfect, 0.0 = worst
     score = max(0.0, 1.0 - penalty)
 
     return {
@@ -245,18 +253,65 @@ def score_exchange(response: str, entry: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Patrick chat — runs through tool router + Ollama
+# ---------------------------------------------------------------------------
+async def _patrick_chat(
+    user_msg: str,
+    *,
+    model: str,
+    system_prompt: str,
+    history: list[dict[str, str]] | None = None,
+    max_tokens: int = 200,
+) -> str:
+    """Run a message through Patrick's full pipeline: route_tools → Ollama."""
+    # 1. Tool routing
+    try:
+        from patrick_agent.tools.tool_router import route_tools
+        tool_blocks = await route_tools(user_msg)
+    except Exception as exc:
+        logger.warning("tool router failed: %s", exc)
+        tool_blocks = []
+
+    full_msg = user_msg
+    if tool_blocks:
+        full_msg = user_msg + "\n\n" + "\n\n".join(tool_blocks)
+
+    # 2. Ollama chat
+    messages: list[dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": full_msg})
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {"temperature": 0.4, "num_predict": max_tokens},
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
+        if resp.status_code != 200:
+            return f"[Ollama error: {resp.text[:200]}]"
+        data = resp.json()
+        return data.get("message", {}).get("content", "")
+
+
+# ---------------------------------------------------------------------------
 # Run evaluation
 # ---------------------------------------------------------------------------
 async def run_eval(
     entries: list[dict],
     *,
+    model: str,
+    system_prompt: str,
     concurrency: int = 3,
     timeout_per: float = 100.0,
     sleep_between: float = 0.0,
 ) -> list[dict]:
     """Run all entries through Patrick and score responses."""
-    from tools.llm_service import os_agent_chat
-
     results = []
     semaphore = asyncio.Semaphore(concurrency)
     total = len(entries)
@@ -268,19 +323,16 @@ async def run_eval(
             history = context if context else None
 
             try:
-                resp = await asyncio.wait_for(
-                    os_agent_chat(
-                        "agent",
+                response_text = await asyncio.wait_for(
+                    _patrick_chat(
                         user_msg,
+                        model=model,
+                        system_prompt=system_prompt,
                         history=history,
-                        source="pat_eval",
                         max_tokens=200,
-                        inject_memory=False,
-                        rag_enabled=False,
                     ),
                     timeout=timeout_per,
                 )
-                response_text = resp.content if resp and resp.content else ""
             except asyncio.TimeoutError:
                 response_text = "[TIMEOUT]"
             except Exception as e:
@@ -326,13 +378,12 @@ def generate_report(results: list[dict]) -> dict:
     scores = [r["score"] for r in results]
     quality_score = sum(scores) / total
 
-    # Per-category breakdown
-    categories = {}
     cat_groups: dict[str, list[dict]] = {}
     for r in results:
         cat = r["category"]
         cat_groups.setdefault(cat, []).append(r)
 
+    categories = {}
     for cat, group in sorted(cat_groups.items()):
         cat_scores = [r["score"] for r in group]
         cat_issues = [i for r in group for i in r["issues"]]
@@ -345,7 +396,6 @@ def generate_report(results: list[dict]) -> dict:
             "top_issues": dict(Counter(cat_issues).most_common(5)),
         }
 
-    # Per-source breakdown (real vs synthetic)
     sources = {}
     for src in ["real", "synthetic"]:
         src_results = [r for r in results if r["source"] == src]
@@ -356,11 +406,9 @@ def generate_report(results: list[dict]) -> dict:
                 "avg_score": round(sum(src_scores) / len(src_scores), 3),
             }
 
-    # All issues
     all_issues = [i for r in results for i in r["issues"]]
     issue_counts = dict(Counter(all_issues).most_common())
 
-    # Worst failures
     worst = sorted(results, key=lambda r: r["score"])[:10]
 
     return {
@@ -402,14 +450,12 @@ def print_report(report: dict) -> None:
     print(f"  Fail Rate:    {report['fail_rate']:.1%}")
     print()
 
-    # Sources
     if report.get("sources"):
         print("  Source Breakdown:")
         for src, data in report["sources"].items():
             print(f"    {src:12s}: {data['count']:3d} exchanges, avg {data['avg_score']:.3f}")
         print()
 
-    # Categories
     print("  Category Breakdown:")
     print(f"  {'Category':<16s} {'Count':>5s} {'Score':>7s} {'Pass%':>7s}  Top Issues")
     print("  " + "-" * 66)
@@ -422,7 +468,6 @@ def print_report(report: dict) -> None:
         )
     print()
 
-    # Issues
     print("  Issue Frequency:")
     for issue, count in report["issue_counts"].items():
         pct = count / report["total_exchanges"]
@@ -430,7 +475,6 @@ def print_report(report: dict) -> None:
         print(f"    {issue:<18s} {count:>4d} ({pct:>5.1%}) {bar}")
     print()
 
-    # Worst failures
     print("  Worst Failures:")
     for w in report["worst_failures"][:5]:
         print(f"    [{w['score']:.2f}] {w['category']}: \"{w['user'][:60]}\"")
@@ -439,6 +483,14 @@ def print_report(report: dict) -> None:
         print()
 
     print("=" * 70)
+
+
+def _load_system_prompt() -> str:
+    """Load IDENTITY.md as the system prompt."""
+    identity = EVAL_DIR.parent / "identity" / "IDENTITY.md"
+    if identity.exists():
+        return identity.read_text()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +504,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output JSON report")
     parser.add_argument("--concurrency", type=int, default=3, help="Max concurrent LLM calls")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for --quick")
-    parser.add_argument("--model-key", type=str, default=None,
-                        help="Override agent model_key (e.g., benai_core_12b)")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL,
+                        help="Ollama model to evaluate (e.g. gemma3:12b)")
     parser.add_argument("--sleep", type=float, default=0.0,
                         help="Seconds to sleep between exchanges (give Ollama breathing room)")
     args = parser.parse_args()
@@ -463,10 +515,9 @@ def main():
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Load dataset
     if not DATASET_PATH.exists():
         logger.error("Dataset not found: %s", DATASET_PATH)
-        logger.error("Run: python3 data/eval/synthetic_dataset.py")
+        logger.error("Build it with: python3 eval/synthetic_dataset.py")
         return 1
 
     entries = []
@@ -477,7 +528,6 @@ def main():
 
     logger.info("Loaded %d eval exchanges from %s", len(entries), DATASET_PATH)
 
-    # Filter
     if args.category:
         entries = [e for e in entries if e.get("category") == args.category]
         logger.info("Filtered to %d exchanges in category '%s'", len(entries), args.category)
@@ -491,9 +541,8 @@ def main():
         logger.error("No entries to evaluate")
         return 1
 
-    # Dry run — just validate
     if args.dry_run:
-        cats = {}
+        cats: dict[str, int] = {}
         for e in entries:
             cat = e.get("category", "unknown")
             cats[cat] = cats.get(cat, 0) + 1
@@ -503,29 +552,26 @@ def main():
         print(f"Total constraints: {constraints_total}")
         return 0
 
-    # Override model if requested
-    if args.model_key:
-        from tools.agent_config import get_agent
-        agent = get_agent("agent")
-        original_model_key = agent.model_key
-        agent.model_key = args.model_key
-        logger.info("Model override: %s -> %s", original_model_key, args.model_key)
-
-    # Run eval
-    logger.info("Starting eval: %d exchanges, concurrency=%d", len(entries), args.concurrency)
+    system_prompt = _load_system_prompt()
+    logger.info("Starting eval: %d exchanges, model=%s, concurrency=%d",
+                len(entries), args.model, args.concurrency)
     start = time.perf_counter()
 
-    results = asyncio.run(run_eval(entries, concurrency=args.concurrency, sleep_between=args.sleep))
+    results = asyncio.run(run_eval(
+        entries,
+        model=args.model,
+        system_prompt=system_prompt,
+        concurrency=args.concurrency,
+        sleep_between=args.sleep,
+    ))
 
     elapsed = time.perf_counter() - start
     logger.info("Eval complete in %.1fs (%.2fs/exchange)", elapsed, elapsed / len(results))
 
-    # Generate report
     report = generate_report(results)
     report["elapsed_seconds"] = round(elapsed, 1)
-    report["model_key"] = args.model_key or "benai_core_local"
+    report["model"] = args.model
 
-    # Save results
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_path = RESULTS_DIR / f"eval_{ts}.json"
@@ -533,13 +579,11 @@ def main():
         json.dump({"report": report, "results": results}, f, indent=2, ensure_ascii=False)
     logger.info("Results saved to %s", results_path)
 
-    # Output
     if args.json:
         print(json.dumps(report, indent=2))
     else:
         print_report(report)
 
-    # Exit code: 0 if quality_score >= 0.6, 1 otherwise
     return 0 if report["quality_score"] >= 0.6 else 1
 
 

@@ -1,30 +1,29 @@
 """Custom Promptfoo provider — tests the full Patrick pipeline.
 
 Runs messages through the complete stack:
-  tool_router → [SYSTEM DATA] injection → os_agent_chat (12b)
+  tool_router → [SYSTEM DATA] injection → Ollama (local LLM)
 
-This ensures Promptfoo tests what Commander actually experiences,
+This ensures Promptfoo tests what the operator actually experiences,
 not just raw Ollama output.
 
 Usage in promptfooconfig.yaml:
   providers:
-    - id: python:data/eval/promptfoo_provider.py
+    - id: python:eval/promptfoo_provider.py
+
+Environment:
+    AGENT_MODEL    Ollama model name. Default: gemma3:12b.
+    OLLAMA_HOST    Ollama base URL. Default: http://localhost:11434.
 """
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
-# Ensure BenAi imports work
-BENAI_ROOT = Path(__file__).resolve().parents[2]
-for p in [str(BENAI_ROOT), str(BENAI_ROOT / "src")]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-# Disable circuit breaker for eval
-os.environ.setdefault("BENAI_CIRCUIT_ENABLED", "false")
+# Make patrick_agent importable when promptfoo runs from the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def _get_loop():
@@ -49,35 +48,22 @@ def call_api(prompt: str, options: dict, context: dict) -> dict:
     Returns:
         {"output": "response text"} or {"error": "message"}
     """
+    from eval.eval_agent import _patrick_chat, _load_system_prompt, DEFAULT_MODEL
+
     loop = _get_loop()
+    system_prompt = _load_system_prompt()
+    model = (options or {}).get("model", DEFAULT_MODEL)
 
     try:
-        # Run through the full tool pipeline
-        from tools.tools.tool_router import route_tools
-        tool_blocks = loop.run_until_complete(route_tools(prompt))
-
-        # Build the message with tool context (same as pat_imsg_loop)
-        tool_context = ""
-        if tool_blocks:
-            tool_context = "\n\n" + "\n\n".join(tool_blocks)
-
-        user_msg = prompt + tool_context
-
-        # Call Patrick via the LLM service
-        from tools.llm_service import os_agent_chat
-        resp = loop.run_until_complete(
-            os_agent_chat(
-                "agent",
-                user_msg,
-                source="promptfoo_eval",
+        output = loop.run_until_complete(
+            _patrick_chat(
+                prompt,
+                model=model,
+                system_prompt=system_prompt,
+                history=None,
                 max_tokens=350,
-                inject_memory=False,
-                rag_enabled=False,
             )
         )
-
-        output = resp.content if resp and resp.content else ""
         return {"output": output}
-
     except Exception as exc:
         return {"error": str(exc)}
