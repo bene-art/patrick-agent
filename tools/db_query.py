@@ -1,34 +1,61 @@
-"""Database read tool — gives Patrick access to his own data.
+"""Database read tool — gives Patrick access to local SQLite databases.
 
-Read-only SQLite queries against known BenAi databases.
-No writes, no DDL, no PRAGMA — SELECT only.
+Read-only SQLite queries. No writes, no DDL, no PRAGMA — SELECT only.
+
+The database allowlist is loaded from `config/databases.yaml` if present,
+or from the AGENT_DBS environment variable (JSON object: {"name": "path"}).
+If neither is set, this tool returns an empty allowlist.
+
+Example config/databases.yaml:
+    picks: ~/data/picks.db
+    calibration: ~/data/calibration.db
 
 Usage:
-    from benai_infra.tools.db_query import db_query
+    from patrick_agent.tools.db_query import db_query
     result = await db_query("picks", "SELECT COUNT(*) FROM picks WHERE date = date('now')")
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import sqlite3
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Known databases Patrick is allowed to query (read-only)
-ALLOWED_DBS: dict[str, Path] = {
-    "picks": Path("data/picks.db"),
-    "calibration": Path("data/calibration.db"),
-    "sports_betting": Path("data/sports_betting.db"),
-    "memory": Path("data/memory.db"),
-    "marketing": Path("data/marketing.db"),
-    "discovery": Path("data/discovery.db"),
-    "health": Path("data/health_ledger.db"),
-}
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_CONFIG_PATH = _REPO_ROOT / "config" / "databases.yaml"
 
 # Hard blocklist — never allow these
 _BLOCKED_KEYWORDS = {"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE",
                      "ATTACH", "DETACH", "PRAGMA", "VACUUM", "REINDEX"}
+
+
+def _load_allowlist() -> dict[str, Path]:
+    """Load DB allowlist from config file or env var."""
+    # 1. config/databases.yaml
+    if _CONFIG_PATH.exists():
+        try:
+            import yaml  # type: ignore
+            data = yaml.safe_load(_CONFIG_PATH.read_text()) or {}
+            return {k: Path(v).expanduser() for k, v in data.items()}
+        except Exception as exc:
+            logger.warning("Failed to load %s: %s", _CONFIG_PATH, exc)
+
+    # 2. AGENT_DBS env var (JSON)
+    env_dbs = os.environ.get("AGENT_DBS", "").strip()
+    if env_dbs:
+        try:
+            data = json.loads(env_dbs)
+            return {k: Path(v).expanduser() for k, v in data.items()}
+        except Exception as exc:
+            logger.warning("Invalid AGENT_DBS env var: %s", exc)
+
+    return {}
+
+
+ALLOWED_DBS: dict[str, Path] = _load_allowlist()
 
 
 def _is_safe_query(sql: str) -> bool:
@@ -43,13 +70,19 @@ async def db_query(db_name: str, sql: str, max_rows: int = 20) -> str:
     """Execute a read-only query against a known database.
 
     Args:
-        db_name: Key from ALLOWED_DBS (e.g. "picks", "calibration")
-        sql: SELECT query to execute
-        max_rows: Maximum rows to return
+        db_name: Key from ALLOWED_DBS (configured in config/databases.yaml or AGENT_DBS env).
+        sql: SELECT query to execute.
+        max_rows: Maximum rows to return.
 
     Returns:
         Query results as formatted text, or error message.
     """
+    if not ALLOWED_DBS:
+        return (
+            "[no databases configured. "
+            "Add entries to config/databases.yaml or set AGENT_DBS env var]"
+        )
+
     if db_name not in ALLOWED_DBS:
         return f"[unknown database: {db_name}. Known: {', '.join(ALLOWED_DBS)}]"
 
@@ -71,7 +104,6 @@ async def db_query(db_name: str, sql: str, max_rows: int = 20) -> str:
         if not rows:
             return "[no results]"
 
-        # Format as readable text
         lines = [" | ".join(columns)]
         lines.append("-" * len(lines[0]))
         for row in rows:

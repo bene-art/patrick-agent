@@ -3,38 +3,36 @@
 Read-only. Scoped to known safe directories. No secrets, no credentials,
 no files outside the allowlist.
 
+Configure the data directory via the AGENT_DATA_DIR environment variable
+(defaults to ~/.patrick-agent). Reports, status snapshots, and logs live
+under that directory.
+
 Usage:
-    from benai_infra.tools.file_read import file_read
-    result = await file_read("reports/picks_2026-04-11.rtf")
+    from patrick_agent.tools.file_read import file_read
+    result = await file_read("reports/latest.md")
 """
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-BENAI_LOCAL = Path.home() / ".benai_local"
-PATRICK_REPO = Path.home() / "projects" / "patrick-agent"
-BENAI_REPO = Path.home() / "BenAi_Local"
-
-# Canonical files Patrick consults for "what's going on" questions:
-#   PATRICK_STATUS.md — live deterministic snapshot, written 7:45 AM daily
-#   BenAi_Master_Plan_2026.md — single-file master plan (architectural intent)
-# Both live under BENAI_LOCAL and are covered by the directory grant below.
+AGENT_DATA_DIR = Path(os.environ.get("AGENT_DATA_DIR", str(Path.home() / ".patrick-agent")))
+PATRICK_REPO = Path(__file__).resolve().parent.parent
 
 # Allowed directory roots — Patrick can read these
 ALLOWED_ROOTS: list[Path] = [
-    BENAI_LOCAL,                                 # PATRICK_STATUS.md, Master Plan, reports, logs
-    PATRICK_REPO / "identity",                   # IDENTITY.md, SOUL.md, outbox
+    AGENT_DATA_DIR,                              # reports, status snapshots, logs, plan docs
+    PATRICK_REPO / "identity",                   # IDENTITY.md, SOUL.md
     PATRICK_REPO / "config",                     # YAML configs (non-secret)
-    BENAI_REPO / "data" / "eval" / "results",    # Eval results
 ]
 
 # Directories Patrick can WRITE to (subset of readable)
 WRITABLE_ROOTS: list[Path] = [
-    BENAI_LOCAL / "reports",                     # Generated reports
-    BENAI_LOCAL / "logs",                        # Activity logs
+    AGENT_DATA_DIR / "reports",                  # Generated reports
+    AGENT_DATA_DIR / "logs",                     # Activity logs
 ]
 
 # Blocked patterns — never read these
@@ -69,8 +67,8 @@ async def file_read(path_str: str) -> str:
     """Read a file from an allowed location.
 
     Args:
-        path_str: Relative path from BenAi_Local or ~/.benai_local,
-                  or absolute path (must be in allowed roots).
+        path_str: Relative path from AGENT_DATA_DIR, or absolute path
+                  (must be in allowed roots).
 
     Returns:
         File contents (capped at MAX_CHARS) or error message.
@@ -80,8 +78,7 @@ async def file_read(path_str: str) -> str:
     path = Path(path_str).expanduser()
     candidates = [
         path,
-        BENAI_LOCAL / path,
-        BENAI_REPO / path,
+        AGENT_DATA_DIR / path,
         PATRICK_REPO / path,
     ]
 
@@ -120,7 +117,7 @@ async def list_files(directory: str) -> str:
         File listing or error message.
     """
     path = Path(directory).expanduser()
-    candidates = [path, BENAI_LOCAL / path, BENAI_REPO / path, PATRICK_REPO / path]
+    candidates = [path, AGENT_DATA_DIR / path, PATRICK_REPO / path]
 
     resolved = None
     for candidate in candidates:
@@ -168,7 +165,7 @@ async def file_write(path_str: str, content: str) -> str:
         Success message or error.
     """
     path = Path(path_str).expanduser()
-    candidates = [path, BENAI_LOCAL / path, BENAI_REPO / path, PATRICK_REPO / path]
+    candidates = [path, AGENT_DATA_DIR / path, PATRICK_REPO / path]
 
     # For new files, use the first candidate whose parent exists
     resolved = None

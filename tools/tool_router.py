@@ -1,26 +1,38 @@
 """Tool router — detects what tools a message needs and executes them.
 
-
 Runs BEFORE the LLM call. Fetches external data and injects it as
-[SYSTEM DATA] context so Patrick can answer with real information
+[SYSTEM DATA] context so the agent can answer with real information
 instead of saying "I don't have that data."
 
 This is intent-based routing, not model-driven tool calling.
 gemma3:12b doesn't support Ollama native tool calling, so we
 detect tool needs via keyword patterns and execute deterministically.
 
+Environment variables:
+    AGENT_STATUS_FILE   Path to the live status snapshot the agent reads
+                        when asked "what did I work on today?" etc.
+                        Default: $AGENT_DATA_DIR/STATUS.md
+    AGENT_PLAN_FILE     Path to the master plan / project-summary doc.
+                        Default: $AGENT_DATA_DIR/PLAN.md
+
 Usage:
-    from delta_infra.tools.tool_router import route_tools
+    from patrick_agent.tools.tool_router import route_tools
     context_blocks = await route_tools("What's the NBA injury report?")
-    # Returns: [("[SYSTEM DATA — web search]\n...injury data...")]
+    # Returns: ["[SYSTEM DATA — web search]\n...injury data..."]
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_AGENT_DATA_DIR = Path(os.environ.get("AGENT_DATA_DIR", str(Path.home() / ".patrick-agent")))
+AGENT_STATUS_FILE = os.environ.get("AGENT_STATUS_FILE", str(_AGENT_DATA_DIR / "STATUS.md"))
+AGENT_PLAN_FILE = os.environ.get("AGENT_PLAN_FILE", str(_AGENT_DATA_DIR / "PLAN.md"))
 
 
 # ── Intent patterns ───────────────────────────────────────────────────
@@ -43,16 +55,16 @@ _WEB_SEARCH_PATTERNS = [
     # Weather
     r"(?i)(?:what'?s? the |)weather\s+(.+)",
     # "Tell me about X" when X is clearly external
-    r"(?i)(?:tell me about|what do you know about|who is|who are)\s+((?!delta|patrick|scout|pulse|mkt|autoresearch|commander).+)",
+    r"(?i)(?:tell me about|what do you know about|who is|who are)\s+((?!patrick|the agent|the system).+)",
     # Questions about external people, companies, concepts
-    r"(?i)(?:how (?:is|are|did|has)|what (?:is|are|did|has)|when (?:is|does|did))\s+((?!delta|patrick|scout|pulse|mkt|autoresearch|commander|the system|the architecture|you ).{10,})",
+    r"(?i)(?:how (?:is|are|did|has)|what (?:is|are|did|has)|when (?:is|does|did))\s+((?!patrick|the agent|the system|the architecture|you ).{10,})",
 ]
 
 _DB_QUERY_PATTERNS = [
-    # Record / stats queries about betting
-    r"(?i)(?:scout'?s?|betting|picks?)\s+(?:record|stats|win rate|accuracy|results?)(?:\s+(.+))?",
+    # Record / stats queries (sports betting example)
+    r"(?i)(?:betting|picks?)\s+(?:record|stats|win rate|accuracy|results?)(?:\s+(.+))?",
     r"(?i)how many (?:picks?|bets?|trades?)",
-    r"(?i)(?:what'?s?|show me|how'?s?)\s+(?:the |our |my |scout'?s? )?(?:record|win rate|P&?L|pnl|results?|picks?)",
+    r"(?i)(?:what'?s?|show me|how'?s?)\s+(?:the |our |my )?(?:record|win rate|P&?L|pnl|results?|picks?)",
     r"(?i)(?:what was|show me|how did)\s+(?:yesterday'?s?|last week'?s?|this month'?s?|this week'?s?|today'?s?)\s+(?:picks?|record|results?|P&?L|pnl|betting)",
     # Calibration
     r"(?i)(?:calibration|brier|accuracy)\s+(?:score|data|stats?|look)",
@@ -69,16 +81,14 @@ _FILE_READ_PATTERNS = [
     r"(?i)(?:show|read|what's in)\s+(?:me )?(?:the )?(?:config|configuration|settings?)\s*(?:for |of )?\s*(.+)?",
     # Logs
     r"(?i)(?:show|read|check|what's in)\s+(?:me )?(?:the )?(?:log|logs)\s*(?:for |of )?\s*(.+)?",
-    # Weekly intel
-    r"(?i)(?:show|read|what's in)\s+(?:me )?(?:the )?(?:weekly|intel|bridge)\s+(?:report|intel|briefing)",
     # IDENTITY / SOUL
-    r"(?i)(?:show|read|what's in)\s+(?:me )?(?:your |patrick'?s? )?(?:identity|soul|IDENTITY\.md|SOUL\.md)",
+    r"(?i)(?:show|read|what's in)\s+(?:me )?(?:your |the agent'?s? )?(?:identity|soul|IDENTITY\.md|SOUL\.md)",
     # Eval results
     r"(?i)(?:show|read|what's in|what were)\s+(?:me )?(?:the )?(?:eval|evaluation)\s+(?:result|score|report)s?",
-    # Master Plan docs
-    r"(?i)(?:show|read|what's in)\s+(?:me )?(?:the |patrick'?s? )?(?:master plan|project summar|agent status|patrick status)",
+    # Status / plan docs
+    r"(?i)(?:show|read|what's in)\s+(?:me )?(?:the |your )?(?:master plan|project summar|agent status|status)",
     r"(?i)(?:master plan|agent status|project summar)",
-    # Daily / recent work summary — routes to PATRICK_STATUS.md
+    # Daily / recent work summary — routes to status snapshot
     r"(?i)(?:summari[sz]e|recap|tldr)\s+(?:what\s+)?(?:i|we|you)\s+(?:worked on|did|got done|shipped)\s+(?:today|this week|recently|yesterday)",
     r"(?i)what\s+(?:did|have)\s+(?:i|we|you)\s+(?:work(?:ed)? on|do(?:ne)?|ship(?:ped)?|finish(?:ed)?)\s+(?:today|this week|recently|yesterday)",
     r"(?i)(?:today'?s?|this week'?s?|recent)\s+(?:work|progress|wins|accomplishments|activity)",
@@ -96,18 +106,18 @@ _API_CALL_PATTERNS = [
 
 _SHELL_EXEC_PATTERNS = [
     # System status checks
-    r"(?i)(?:is |are )?(?:ollama|the server|betting server|api|services?)\s+(?:running|up|down|alive|status)",
+    r"(?i)(?:is |are )?(?:ollama|the server|api|services?)\s+(?:running|up|down|alive|status)",
     r"(?i)(?:check |show me |what's )?(?:the )?(?:disk|storage|memory|ram|cpu)\s*(?:space|usage|pressure|left)?",
     r"(?i)(?:what's|show me|check)\s+(?:the )?(?:uptime|system load|system status)",
     r"(?i)(?:what|which)\s+(?:processes?|services?)\s+(?:are |is )?(?:running|using|eating|hogging)",
     r"(?i)(?:how much |)(?:disk|storage|memory|ram)\s+(?:is |do we have |)(?:left|free|available|used)",
-    r"(?i)(?:list |show )?(?:running |active )?(?:launchd |delta )?(?:jobs|services|daemons)",
+    r"(?i)(?:list |show )?(?:running |active )?(?:launchd )?(?:jobs|services|daemons)",
     r"(?i)ollama (?:ps|status|list|models)",
 ]
 
 _FILE_WRITE_PATTERNS = [
-    # Update master plan docs
-    r"(?i)(?:update|write|edit|change|fix|rewrite)\s+(?:the |your |my |patrick'?s? )?(?:master plan|project summar|agent status|patrick status|STATUS\.md)",
+    # Update status / plan docs
+    r"(?i)(?:update|write|edit|change|fix|rewrite)\s+(?:the |your |my )?(?:master plan|project summar|agent status|status\.md)",
     # Log / note taking
     r"(?i)(?:log|note|record|write down|save)\s+(?:that |this |today'?s? )?(.+)",
 ]
@@ -131,8 +141,6 @@ async def route_tools(message: str) -> list[str]:
     # ── Tool chaining: check ALL tool groups, collect all matches ──
     # Each group fires at most once (break within group).
     # Multiple groups can fire for the same message.
-    # Example: "Check Alpaca positions and compare with yesterday's picks"
-    #   → API (alpaca_positions) + DB (recent picks) → both injected
 
     # 0. File WRITE (cloud-escalated) — exclusive, no chaining
     write_matched = False
@@ -200,24 +208,19 @@ async def route_tools(message: str) -> list[str]:
                 if m:
                     query = message
                     logger.info("tool_router: web_search triggered, query=%r", query[:80])
-                    from delta_infra.tools.web_search import web_search
+                    from patrick_agent.tools.web_search import web_search
                     result = await web_search(query)
                     if result and "[" not in result[:5]:
-                        blocks.append(
-                            f"[SYSTEM DATA — web search results]\n{result}"
-                        )
+                        blocks.append(f"[SYSTEM DATA — web search results]\n{result}")
                         _tools_fired.append("web_search")
                     break
 
-    # 5. Web search FALLBACK — if nothing matched and the question
-    #    looks external (not about BenAi internals), search the web.
-    #    This catches natural phrasing that regex patterns miss.
+    # 5. Web search FALLBACK — if nothing matched and the question looks external
     if not blocks:
         ml = message.lower()
         _INTERNAL_KEYWORDS = {
-            "delta", "patrick", "scout", "pulse", "mkt", "autoresearch",
-            "commander", "architecture", "identity", "soul", "system",
-            "config", "launchd", "daemon", "briefing", "dispatch",
+            "patrick", "agent", "architecture", "identity", "soul",
+            "system", "config", "launchd", "daemon", "tool", "tools",
         }
         is_internal = any(kw in ml for kw in _INTERNAL_KEYWORDS)
         is_question = any(ml.startswith(q) for q in [
@@ -227,16 +230,14 @@ async def route_tools(message: str) -> list[str]:
         # Only search if it looks like an external question
         if is_question and not is_internal and len(message) > 10:
             logger.info("tool_router: web_search FALLBACK for: %r", message[:80])
-            from delta_infra.tools.web_search import web_search
+            from patrick_agent.tools.web_search import web_search
             result = await web_search(message)
             if result and "[" not in result[:5]:
-                blocks.append(
-                    f"[SYSTEM DATA — web search results]\n{result}"
-                )
+                blocks.append(f"[SYSTEM DATA — web search results]\n{result}")
 
     # ── Telemetry: log what happened ──
     try:
-        from delta_infra.tools.telemetry import log_tool_use, log_tool_skip
+        from patrick_agent.tools.telemetry import log_tool_use, log_tool_skip
         if _tools_fired:
             tool_name = "+".join(_tools_fired) if len(_tools_fired) > 1 else _tools_fired[0]
             log_tool_use(tool_name, message, "\n".join(blocks))
@@ -254,8 +255,13 @@ async def route_tools(message: str) -> list[str]:
 
 
 async def _route_db_query(message: str) -> str:
-    """Map natural language to a database query."""
-    from delta_infra.tools.db_query import db_query
+    """Map natural language to a database query.
+
+    The picks/calibration/pnl queries below assume a sports-betting schema.
+    If your agent uses different tables, override this function (or skip
+    db_query entirely by leaving config/databases.yaml empty).
+    """
+    from patrick_agent.tools.db_query import db_query
     ml = message.lower()
 
     if any(w in ml for w in ["pick", "bet", "record", "win rate"]):
@@ -290,7 +296,7 @@ async def _route_db_query(message: str) -> str:
 
 async def _route_api_call(message: str) -> str:
     """Map natural language to an API call."""
-    from delta_infra.tools.api_call import api_call
+    from patrick_agent.tools.api_call import api_call
     ml = message.lower()
 
     if any(w in ml for w in ["alpaca", "portfolio", "positions", "holdings", "stock account"]):
@@ -311,7 +317,7 @@ async def _route_api_call(message: str) -> str:
 
 async def _route_shell_exec(message: str) -> str:
     """Map natural language to an allowlisted shell command."""
-    from delta_infra.tools.shell_exec import shell_exec
+    from patrick_agent.tools.shell_exec import shell_exec
     ml = message.lower()
 
     if "ollama" in ml and any(w in ml for w in ["ps", "status", "running", "loaded", "models"]):
@@ -333,10 +339,10 @@ async def _route_shell_exec(message: str) -> str:
     if any(w in ml for w in ["process", "service"]) and any(w in ml for w in ["running", "active"]):
         if "python" in ml:
             return await shell_exec("python_procs")
-        return await shell_exec("launchd_delta")
+        return await shell_exec("launchd_jobs")
 
     if any(w in ml for w in ["launchd", "jobs", "daemons"]):
-        return await shell_exec("launchd_delta")
+        return await shell_exec("launchd_jobs")
 
     if any(w in ml for w in ["port", "listening"]):
         return await shell_exec("ports")
@@ -354,34 +360,27 @@ async def _route_shell_exec(message: str) -> str:
 
 async def _route_file_write(message: str) -> str:
     """Route write operations to Gemini cloud escalation."""
-    from delta_infra.tools.cloud_write import cloud_write_file
-    from delta_infra.tools.file_read import file_read
+    from patrick_agent.tools.cloud_write import cloud_write_file
+    from patrick_agent.tools.file_read import file_read
     ml = message.lower()
 
-    # Load Patrick's current identity as context for accurate writes
+    # Load IDENTITY.md as context for accurate writes
     identity_ctx = ""
     try:
         identity_ctx = await file_read("identity/IDENTITY.md")
     except Exception:
         pass
 
-    if any(w in ml for w in ["agent status", "patrick status", "patrick's status"]):
+    if any(w in ml for w in ["agent status", "status.md"]):
         return await cloud_write_file(
-            path="07_Agents/Patrick/STATUS.md",
+            path="STATUS.md",
             instruction=message,
             context=identity_ctx,
         )
 
-    if "project summar" in ml:
+    if "project summar" in ml or "master plan" in ml:
         return await cloud_write_file(
-            path="06_Project_Summaries/patrick-agent.md",
-            instruction=message,
-            context=identity_ctx,
-        )
-
-    if "master plan" in ml:
-        return await cloud_write_file(
-            path="project-docs.md",
+            path="PLAN.md",
             instruction=message,
             context=identity_ctx,
         )
@@ -390,7 +389,7 @@ async def _route_file_write(message: str) -> str:
         from datetime import datetime
         date_str = datetime.now().strftime("%Y-%m-%d")
         return await cloud_write_file(
-            path=f"05_Logs_and_Notes/Session_Notes/{date_str}_patrick_log.md",
+            path=f"logs/{date_str}_session.md",
             instruction=message,
             context=identity_ctx,
         )
@@ -400,7 +399,7 @@ async def _route_file_write(message: str) -> str:
 
 async def _route_file_read(message: str) -> str:
     """Map natural language to a file read."""
-    from delta_infra.tools.file_read import file_read, list_files
+    from patrick_agent.tools.file_read import file_read, list_files
     ml = message.lower()
 
     if any(w in ml for w in ["morning report", "picks report", "today's report"]):
@@ -413,14 +412,6 @@ async def _route_file_read(message: str) -> str:
                 return await file_read(f"reports/{first_file}")
         return "[no reports found]"
 
-    if any(w in ml for w in ["weekly intel", "bridge report", "weekly report"]):
-        listing = await list_files("identity/outbox")
-        if listing and "[" not in listing[:5]:
-            first_file = listing.split("\n")[0].strip()
-            if first_file:
-                return await file_read(f"identity/outbox/{first_file}")
-        return "[no weekly intel found]"
-
     if any(w in ml for w in ["identity", "identity.md"]):
         return await file_read("identity/IDENTITY.md")
 
@@ -428,16 +419,16 @@ async def _route_file_read(message: str) -> str:
         return await file_read("identity/SOUL.md")
 
     if any(w in ml for w in ["eval result", "evaluation result", "eval score"]):
-        listing = await list_files("data/eval/results")
+        listing = await list_files("eval/results")
         if listing and "[" not in listing[:5]:
             first_file = listing.split("\n")[0].strip()
             if first_file:
-                return await file_read(f"data/eval/results/{first_file}")
+                return await file_read(f"eval/results/{first_file}")
         return "[no eval results found]"
 
-    # "what did I work on today" → live PATRICK_STATUS snapshot (deterministic,
-    # written 7:45 AM by morning brief launchd). Patrick should ALWAYS read
-    # the live file, never invent a recap.
+    # "what did I work on today" → live status snapshot (deterministic,
+    # typically written by a morning brief job). Always read the live file,
+    # never invent a recap.
     if any(
         kw in ml
         for kw in [
@@ -461,23 +452,17 @@ async def _route_file_read(message: str) -> str:
             "today's activity",
         ]
     ):
-        return await file_read("~/.benai_local/PATRICK_STATUS.md")
+        return await file_read(AGENT_STATUS_FILE)
 
-    # Master Plan: single canonical file (legacy Desktop snapshot retired).
-    if any(w in ml for w in ["master plan"]):
-        return await file_read("~/.benai_local/BenAi_Master_Plan_2026.md")
-
-    # Agent / Patrick status → live deterministic file
-    if any(w in ml for w in ["agent status", "patrick status", "patrick's status"]):
-        return await file_read("~/.benai_local/PATRICK_STATUS.md")
-
-    # Project summaries are now folded into the Master Plan.
-    if any(w in ml for w in ["project summar"]):
-        return await file_read("~/.benai_local/BenAi_Master_Plan_2026.md")
+    # Master Plan / project summary
+    if any(w in ml for w in ["master plan", "project summar", "agent status", "status"]):
+        if "status" in ml:
+            return await file_read(AGENT_STATUS_FILE)
+        return await file_read(AGENT_PLAN_FILE)
 
     if "config" in ml:
         # Try to find the specific config mentioned
-        for cfg in ["betting_profit", "alerting", "routing", "cluster", "features"]:
+        for cfg in ["databases", "agent", "routing", "alerting"]:
             if cfg in ml:
                 return await file_read(f"config/{cfg}.yaml")
         # Default: list available configs

@@ -8,7 +8,7 @@ The JSONL file feeds back into the eval corpus — real conversations
 become test cases automatically.
 
 Usage:
-    from benai_infra.tools.telemetry import log_tool_use, log_tool_skip
+    from patrick_agent.tools.telemetry import log_tool_use, log_tool_skip
 
     log_tool_use("web_search", message, result, response)
     log_tool_skip(message, response)  # no tool fired

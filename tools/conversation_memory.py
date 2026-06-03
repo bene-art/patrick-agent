@@ -5,7 +5,7 @@ Stores the last N exchanges per thread_id so Patrick remembers
 what was discussed.
 
 Usage:
-    from benai_infra.tools.conversation_memory import ConversationMemory
+    from patrick_agent.tools.conversation_memory import ConversationMemory
     mem = ConversationMemory()
     mem.add("tg_123", "What's the weather?", "It's sunny in Chicago.")
     history = mem.get_history("tg_123", limit=10)

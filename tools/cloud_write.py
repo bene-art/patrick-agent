@@ -1,34 +1,35 @@
-"""Cloud-escalated file write — Gemini does the thinking, system does the writing.
+"""Cloud-escalated file write — Gemini does the thinking, the system does the writing.
 
-When Patrick needs to update a file, he can't generate content AND call a write
-tool in one pass (gemma3:12b doesn't support tool calling). So we escalate to
-Gemini Flash which CAN do function calling:
+When the local agent needs to update a file, it can't generate content AND
+call a write tool in one pass (gemma3:12b doesn't support tool calling).
+So we escalate to Gemini Flash which CAN do function calling:
 
 1. Read the current file
-2. Send to Gemini with context + write_file tool
+2. Send to Gemini with context + write_file function declaration
 3. Gemini generates new content and calls write_file
-4. We execute the write
-5. Return confirmation for Patrick to relay
+4. We execute the write locally
+5. Return confirmation for the local agent to relay
 
-Scoped to BenAi Master Plan directory only.
+Scoped to AGENT_DATA_DIR (default ~/.patrick-agent). The path you pass is
+resolved relative to that directory.
 
 Usage:
-    from benai_infra.tools.cloud_write import cloud_write_file
+    from patrick_agent.tools.cloud_write import cloud_write_file
     result = await cloud_write_file(
-        path="07_Agents/Patrick/STATUS.md",
-        instruction="Update with current state: 12b model, Telegram, 4 tools",
-        context="Patrick's current IDENTITY.md contents..."
+        path="STATUS.md",
+        instruction="Update with current state: 12B model, Telegram, 9 tools",
+        context="Patrick's current IDENTITY.md contents...",
     )
 """
 from __future__ import annotations
 
-import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-MASTER_PLAN = Path.home() / "Desktop" / "project-docs"
+AGENT_DATA_DIR = Path(os.environ.get("AGENT_DATA_DIR", str(Path.home() / ".patrick-agent")))
 
 
 async def cloud_write_file(
@@ -39,25 +40,19 @@ async def cloud_write_file(
     """Escalate to Gemini Flash to generate and write file content.
 
     Args:
-        path: Relative path within Master Plan directory.
+        path: Relative path within AGENT_DATA_DIR (e.g. "STATUS.md").
         instruction: What to do (e.g. "Update with current state").
-        context: Additional context (e.g. Patrick's IDENTITY.md).
+        context: Additional context (e.g. IDENTITY.md contents).
 
     Returns:
         Confirmation message or error.
     """
-    from benai_infra.llm.cloud_providers import route_to_gemini
-    from benai_infra.model_registry import MODEL_REGISTRY
-    from benai_infra.tools.file_read import file_read, file_write, _is_writable_path
+    from patrick_agent.tools.file_read import file_read, file_write, _is_writable_path
+    from patrick_agent.tools.gemini_chat import gemini_chat
 
-    cfg = MODEL_REGISTRY.get("gemini_flash")
-    if not cfg:
-        return "[cloud write unavailable — gemini_flash not in registry]"
-
-    # Resolve path within master plan
-    full_path = MASTER_PLAN / path
+    full_path = AGENT_DATA_DIR / path
     if not _is_writable_path(full_path):
-        return f"[write denied: {path} is not in the Master Plan directory]"
+        return f"[write denied: {path} is not in a writable directory under AGENT_DATA_DIR]"
 
     # Read current file if it exists
     current_content = ""
@@ -66,8 +61,8 @@ async def cloud_write_file(
 
     # Build the Gemini request with function calling
     system_prompt = (
-        "You are Patrick, BenAi's operations officer. You are updating a documentation file "
-        "in the BenAi Master Plan. Write accurate, current content based on the context provided. "
+        "You are updating a documentation file for a local-first AI agent. "
+        "Write accurate, current content based on the context provided. "
         "Use markdown formatting. Be concise and factual. "
         "Call the write_file function with the COMPLETE updated file content."
     )
@@ -83,7 +78,7 @@ async def cloud_write_file(
         {"role": "user", "content": user_message},
     ]
 
-    # Gemini function calling tool definition
+    # Gemini function-call tool declaration
     tools = [{
         "function_declarations": [{
             "name": "write_file",
@@ -102,35 +97,30 @@ async def cloud_write_file(
     }]
 
     try:
-        result = await route_to_gemini(
-            cfg, messages, temperature=0.3, max_tokens=2000, tools=tools
+        resp = await gemini_chat(
+            messages,
+            temperature=0.3,
+            max_tokens=2000,
+            tools=tools,
         )
 
-        if not result:
-            return "[Gemini returned empty response]"
+        if resp.get("error"):
+            return f"[Gemini error: {resp['error']}]"
 
-        # Parse the function call from the response
-        if "<tool_call>" in result:
-            # Extract the tool call JSON
-            start = result.index("<tool_call>") + len("<tool_call>")
-            end = result.index("</tool_call>")
-            call_json = json.loads(result[start:end])
+        fc = resp.get("function_call")
+        if fc and fc.get("name") == "write_file":
+            content = fc.get("args", {}).get("content", "")
+            if content:
+                await file_write(str(full_path), content)
+                logger.info("cloud_write: path=%s, chars=%d", full_path, len(content))
+                return f"[file updated: {path} ({len(content)} chars)]"
 
-            if call_json.get("tool") == "write_file":
-                content = call_json["params"].get("content", "")
-                if content:
-                    write_result = await file_write(str(full_path), content)
-                    logger.info(
-                        "cloud_write: path=%s, chars=%d",
-                        full_path, len(content),
-                    )
-                    return f"[file updated: {path} ({len(content)} chars)]"
-
-        # Gemini might return text without a function call — use the text as content
-        if result.strip() and "<tool_call>" not in result:
-            write_result = await file_write(str(full_path), result)
-            logger.info("cloud_write (text fallback): path=%s, chars=%d", full_path, len(result))
-            return f"[file updated: {path} ({len(result)} chars)]"
+        # Fallback: Gemini returned text instead of a function call
+        text = resp.get("text", "").strip()
+        if text:
+            await file_write(str(full_path), text)
+            logger.info("cloud_write (text fallback): path=%s, chars=%d", full_path, len(text))
+            return f"[file updated: {path} ({len(text)} chars)]"
 
         return "[Gemini did not generate file content]"
 
