@@ -1,0 +1,20 @@
+name: Patrick
+model: gemma3:12b
+channel: cli           # cli | telegram
+temperature: 0.4
+max_tokens: 350
+
+ollama_host: http://localhost:11434
+
+# Patrick's tool router covers web_search itself, so the kit's built-in
+# search is left off. Set search.provider to "gemini" or "duckduckgo" if
+# you want the kit's lightweight search instead of Patrick's full router.
+search:
+  provider: none
+
+conversation_memory:
+  enabled: true
+  max_history: 20
+
+tools:
+  web_search: true
