@@ -1,15 +1,19 @@
-"""Telegram channel — wraps scripts.pat_tg.send_message.
+"""Telegram notification channel — direct Bot API send.
 
-Pilot decision: shares the Patrick bot token (PAT_TG_BOT_TOKEN). Verified
-safe because Telegram Bot API's getUpdates does not return the bot's own
-outbound messages, so Patrick's pat_tg_loop.py will not see notify_service
-alerts in its inbound stream and cannot self-pollute.
+For one-shot notifications (alerts, morning briefs). For full
+conversational message loops, use
+`local_agent_kit.channels.telegram_channel.TelegramChannel` instead.
+
+Requires:
+    PAT_TG_BOT_TOKEN  Telegram bot token (from @BotFather).
+    PAT_TG_CHAT_ID    Default chat ID to send to.
 """
 from __future__ import annotations
 
 import logging
-import sys
-from pathlib import Path
+import os
+
+import requests
 
 from patrick_agent.notify.base import (
     Channel,
@@ -21,15 +25,29 @@ from patrick_agent.notify.base import (
 
 _logger = logging.getLogger(__name__)
 
+_TG_API_BASE = "https://api.telegram.org/bot"
 
-def _load_pat_tg():
-    """Lazy import pat_tg from scripts/. Keeps patrick_agent import-time clean."""
-    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    import pat_tg  # type: ignore
 
-    return pat_tg
+def _send_message(text: str, chat_id: int | str | None = None) -> bool:
+    """Send a text message via the Telegram Bot API."""
+    token = os.environ.get("PAT_TG_BOT_TOKEN", "")
+    cid = chat_id if chat_id is not None else os.environ.get("PAT_TG_CHAT_ID", "")
+    if not token or not cid:
+        _logger.warning("Telegram credentials missing (PAT_TG_BOT_TOKEN/PAT_TG_CHAT_ID)")
+        return False
+    try:
+        resp = requests.post(
+            f"{_TG_API_BASE}{token}/sendMessage",
+            json={"chat_id": cid, "text": text[:4096]},
+            timeout=15,
+        )
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return True
+        _logger.warning("Telegram send failed: %s", resp.text[:200])
+        return False
+    except Exception as exc:
+        _logger.warning("Telegram send error: %s", exc)
+        return False
 
 
 class TelegramChannel(Channel):
@@ -38,13 +56,9 @@ class TelegramChannel(Channel):
         *,
         channel_id: str = "telegram",
         config: ChannelConfig | None = None,
-        chat_id: int | None = None,
-        _pat_tg_module: object | None = None,  # test injection
+        chat_id: int | str | None = None,
     ) -> None:
         super().__init__(channel_id, config)
-        self._pat_tg = (
-            _pat_tg_module if _pat_tg_module is not None else _load_pat_tg()
-        )
         self.chat_id = chat_id
 
     def send(
@@ -63,7 +77,7 @@ class TelegramChannel(Channel):
                 message_preview=preview,
                 error="channel disabled",
             )
-        # Use First Officer formatter for alerts (Tier 3)
+        # Use the First Officer formatter for alerts (Tier 3)
         if severity is not None and severity in (
             Severity.CAPITAL_CRITICAL, Severity.HIGH
         ):
@@ -73,21 +87,11 @@ class TelegramChannel(Channel):
             text = f"{title}\n\n{body}" if title else body
         # Telegram hard limit 4096; honor configured cap otherwise.
         text = text[: min(self.config.max_message_length, 4096)]
-        try:
-            ok = self._pat_tg.send_message(text, chat_id=self.chat_id)
-            return DeliveryResult(
-                success=bool(ok),
-                channel_id=self.channel_id,
-                timestamp=self._now(),
-                message_preview=preview,
-                error=None if ok else "pat_tg.send_message returned False",
-            )
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("TelegramChannel send failed: %s", exc)
-            return DeliveryResult(
-                success=False,
-                channel_id=self.channel_id,
-                timestamp=self._now(),
-                message_preview=preview,
-                error=str(exc),
-            )
+        ok = _send_message(text, chat_id=self.chat_id)
+        return DeliveryResult(
+            success=bool(ok),
+            channel_id=self.channel_id,
+            timestamp=self._now(),
+            message_preview=preview,
+            error=None if ok else "Telegram send failed",
+        )
