@@ -113,7 +113,7 @@ ollama pull gemma3:12b
 # 2. Clone + install
 git clone https://github.com/bene-art/patrick-agent
 cd patrick-agent
-pip install -r requirements.txt   # pulls local-agent-kit + httpx + aiohttp + pyyaml
+pip install -e .                  # installs patrick_agent + local-agent-kit + deps
 
 # 3. Configure
 cp .env.example .env
@@ -131,35 +131,40 @@ python3 scripts/run_patrick.py
 
 ```
 patrick-agent/
+├── pyproject.toml          # pip install -e .  → installs patrick_agent + deps
 ├── agent.yaml              # Kit config: model, channel, memory
 ├── identity/
 │   ├── IDENTITY.md         # Who the agent is (template — customize this)
 │   └── SOUL.md             # Operating modes + hard constraints (template)
-├── tools/                  # Six routable tools + 3 infra modules + 1 helper
-│   ├── tool_router.py      # Pattern-matched dispatcher + chaining
-│   ├── web_search.py       # Wraps local_agent_kit.search.GeminiSearch
-│   ├── db_query.py         # Read-only SQLite (config-driven allowlist)
-│   ├── file_read.py        # Scoped file access + write
-│   ├── cloud_write.py      # Gemini function calling for writes
-│   ├── shell_exec.py       # Allowlisted read-only commands
-│   ├── api_call.py         # Direct Alpaca + Odds API REST
-│   ├── telemetry.py        # JSONL tool-use audit log
-│   ├── conversation_memory.py  # SQLite-backed per-thread history
-│   └── gemini_chat.py      # Minimal Gemini Flash chat for cloud escalation
+├── patrick_agent/          # The importable package
+│   ├── __init__.py
+│   ├── tools/              # Six routable tools + 3 infra modules + 1 helper
+│   │   ├── tool_router.py  # Pattern-matched dispatcher + chaining
+│   │   ├── web_search.py   # Wraps local_agent_kit.search.GeminiSearch
+│   │   ├── db_query.py     # Read-only SQLite (config-driven allowlist)
+│   │   ├── file_read.py    # Scoped file access + write
+│   │   ├── cloud_write.py  # Gemini function calling for writes
+│   │   ├── shell_exec.py   # Allowlisted read-only commands
+│   │   ├── api_call.py     # Direct Alpaca + Odds API REST
+│   │   ├── telemetry.py    # JSONL tool-use audit log
+│   │   ├── conversation_memory.py  # SQLite-backed per-thread history
+│   │   └── gemini_chat.py  # Minimal Gemini Flash chat for cloud escalation
+│   └── notify/
+│       ├── formatter.py    # Tier 2 (reports) / Tier 3 (alerts)
+│       ├── telegram.py     # Direct Telegram Bot API send
+│       └── base.py         # Channel ABC + Severity enum
 ├── eval/
 │   ├── eval_agent.py       # Immutable scorer + failure taxonomy
 │   ├── promptfoo_provider.py   # Full-pipeline Promptfoo provider
 │   └── synthetic_dataset.py    # Test case generator
-├── notify/
-│   ├── formatter.py        # Tier 2 (reports) / Tier 3 (alerts)
-│   ├── telegram.py         # Direct Telegram Bot API send
-│   └── base.py             # Channel ABC + Severity enum
 ├── scripts/
 │   ├── run_patrick.py      # Main entry point — wires kit + tool router
 │   └── nightly_eval.py     # Regression-detection template
+├── tests/
+│   └── test_smoke.py       # Import + dispatcher smoke tests
 ├── docs/
 │   └── white_paper_v2.md   # Technical white paper
-├── requirements.txt
+├── requirements.txt        # Loose alternative to pyproject for non-package use
 ├── .env.example
 ├── LICENSE                 # MIT
 └── README.md

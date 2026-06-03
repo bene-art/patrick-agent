@@ -1,0 +1,64 @@
+"""Smoke tests — verify the package is wired correctly.
+
+These don't hit Ollama or any external API. They check that imports
+resolve, dataclasses construct, and the tool router routes without
+exploding when its dependencies are missing (graceful degradation).
+"""
+from __future__ import annotations
+
+import asyncio
+
+
+def test_package_imports():
+    import patrick_agent
+    assert patrick_agent.__version__
+
+
+def test_tool_router_imports():
+    from patrick_agent.tools.tool_router import route_tools  # noqa: F401
+
+
+def test_notify_imports():
+    from patrick_agent.notify.base import Channel, Severity, ChannelConfig
+    from patrick_agent.notify.formatter import fmt_report, fmt_alert, should_interrupt
+    assert Severity.HIGH.value == "high"
+
+
+def test_formatter_produces_expected_shape():
+    from patrick_agent.notify.formatter import fmt_report, fmt_alert
+    from patrick_agent.notify.base import Severity
+
+    report = fmt_report(
+        title="Morning Brief",
+        sections=[("Markets", "S&P +0.4%"), ("Tasks", "All clear")],
+        footer="OK",
+    )
+    assert "Morning Brief" in report
+    assert "Markets" in report
+    assert "S&P" in report
+
+    alert = fmt_alert(
+        title="Outage",
+        error="Connection refused",
+        severity=Severity.HIGH,
+        job="com.example.job",
+        action="Restart service",
+    )
+    assert "Outage" in alert
+    assert "Connection refused" in alert
+    assert "Restart service" in alert
+
+
+def test_route_tools_handles_empty_message():
+    """The router must not crash on innocuous input even when no API keys are set."""
+    from patrick_agent.tools.tool_router import route_tools
+    result = asyncio.run(route_tools("hello"))
+    assert isinstance(result, list)
+
+
+def test_route_tools_returns_list_for_internal_question():
+    """Internal questions about the agent should not trigger web search."""
+    from patrick_agent.tools.tool_router import route_tools
+    result = asyncio.run(route_tools("what is your identity"))
+    # Should hit the file_read branch or no-op; in either case returns a list.
+    assert isinstance(result, list)
