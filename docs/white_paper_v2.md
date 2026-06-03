@@ -40,7 +40,7 @@ The result: Patrick scores 0.9651 on keyword evaluation (518 entries, clean run)
 
 Patrick exists at the intersection of two competing forces:
 
-**Sovereignty:** Core inference and data storage run locally on a Mac mini M4 with 16 GB of RAM. The Commander (Ben Easington) owns all data, all models, all infrastructure. Privacy is a hard constraint, not a preference. But "local-first" is not "local-only" — web search, file writes, and eval grading escalate to Google's Gemini API. Communication runs through Telegram's servers. The sovereignty applies to inference and storage, not to every byte Patrick touches.
+**Sovereignty:** Core inference and data storage run locally on a Mac mini M4 with 16 GB of RAM. The operator owns all data, all models, all infrastructure. Privacy is a hard constraint, not a preference. But "local-first" is not "local-only" — web search, file writes, and eval grading escalate to Google's Gemini API. Communication runs through Telegram's servers. The sovereignty applies to inference and storage, not to every byte Patrick touches.
 
 **Capability:** The best AI models are cloud-hosted. A 12b local model will never match Sonnet or GPT-4o on reasoning. Local hardware constrains what can run simultaneously. A 16 GB machine can't hold a 12b model and three specialist models at once.
 
@@ -382,7 +382,7 @@ iMessage was deprecated in April 2026. Telegram replaced it as the primary commu
 
 ## Three-Tier Message Formatting
 
-Messages from Patrick follow a visual hierarchy so Commander can identify message type before reading content:
+Messages from Patrick follow a visual hierarchy so the operator can identify message type before reading content:
 
 **Tier 1 — Chat:** No formatting. Natural conversation. "Autoresearch is progressing steadily..." Handled by `pat_tg_loop.py`, no formatter involved.
 
@@ -814,7 +814,7 @@ These principles appear throughout the system. They are verified in the code and
 |---|-----------|---------------|---------------|
 | 1 | Determinism over intelligence | Routing, tool selection, all execution gates | Tool router is deterministic Python, not LLM |
 | 2 | One voice, many hands | Single chat path, six tool handlers | Tools execute independently; Patrick synthesizes |
-| 3 | Belt and suspenders | Dual allowlists, re-gate after approval | Shell exec allowlist + risk level + Commander approval |
+| 3 | Belt and suspenders | Dual allowlists, re-gate after approval | Shell exec allowlist + risk level + operator approval |
 | 4 | Blocked over wrong | Safe mode, refuse gate, lockdown | Tools fail closed (empty result, not hallucination) |
 | 5 | Audit everything | Hash chain, execution receipts, telemetry | Tool telemetry: 2,175 events/day logged to JSONL |
 | 6 | Degrade gracefully | Safe mode cascade, LLM fallback | Tool router fallback: regex → web search → nothing |

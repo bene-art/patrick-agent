@@ -113,10 +113,13 @@ cp .env.example .env
 # Edit .env with API keys you want enabled (Gemini, Telegram, Alpaca, Odds API)
 # Edit identity/IDENTITY.md with your agent's name and domain context
 
-# 4. Smoke-test the pipeline
+# 4. Generate the starter eval corpus
+python3 eval/synthetic_dataset.py
+
+# 5. Smoke-test the pipeline (10 random entries through your local model)
 python3 eval/eval_agent.py --quick
 
-# 5. Start the agent (CLI by default; set channel: telegram in agent.yaml for TG)
+# 6. Start the agent (CLI by default; set channel: telegram in agent.yaml for TG)
 python3 scripts/run_patrick.py
 ```
 
