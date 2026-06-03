@@ -66,7 +66,9 @@ DATASET_PATH = EVAL_DIR / "patrick_eval_full.jsonl"
 RESULTS_DIR = EVAL_DIR / "results"
 
 DEFAULT_MODEL = os.environ.get("AGENT_MODEL", "gemma3:12b")
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+_RAW_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+# Ollama's own docs use scheme-less hosts (e.g. "localhost:11434"); normalize.
+OLLAMA_HOST = _RAW_OLLAMA_HOST if "://" in _RAW_OLLAMA_HOST else f"http://{_RAW_OLLAMA_HOST}"
 
 # ---------------------------------------------------------------------------
 # Failure taxonomy weights — higher = worse failure

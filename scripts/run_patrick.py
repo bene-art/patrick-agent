@@ -25,38 +25,46 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from local_agent_kit.agent import Agent  # noqa: E402
-
 logger = logging.getLogger(__name__)
 
 
-class PatrickAgent(Agent):
-    """Agent subclass that runs Patrick's full tool router before each LLM call."""
+def _build_patrick_agent_cls():
+    """Lazy-build the PatrickAgent class.
 
-    async def handle(self, text: str) -> str:
-        # 1. Route through Patrick's tool detector.
-        try:
-            from patrick_agent.tools.tool_router import route_tools
-            tool_blocks = await route_tools(text)
-        except Exception as exc:
-            logger.warning("tool router failed: %s", exc)
-            tool_blocks = []
+    Importing `local_agent_kit` happens here so `--help` works on a
+    fresh clone before `pip install -e .` has been run.
+    """
+    from local_agent_kit.agent import Agent
 
-        # 2. Inject [SYSTEM DATA] inline into the user message.
-        full_msg = text
-        if tool_blocks:
-            full_msg = text + "\n\n" + "\n\n".join(tool_blocks)
+    class PatrickAgent(Agent):
+        """Agent subclass that runs Patrick's full tool router before each LLM call."""
 
-        # 3. Call Ollama via the parent's implementation.
-        response = await self._ollama_chat(full_msg)
+        async def handle(self, text: str) -> str:
+            # 1. Route through Patrick's tool detector.
+            try:
+                from patrick_agent.tools.tool_router import route_tools
+                tool_blocks = await route_tools(text)
+            except Exception as exc:
+                logger.warning("tool router failed: %s", exc)
+                tool_blocks = []
 
-        # 4. Update conversation history (mirror Agent.handle).
-        self._history.append({"role": "user", "content": text})
-        self._history.append({"role": "assistant", "content": response})
-        if len(self._history) > self.config.memory_max_history:
-            self._history = self._history[-self.config.memory_max_history:]
+            # 2. Inject [SYSTEM DATA] inline into the user message.
+            full_msg = text
+            if tool_blocks:
+                full_msg = text + "\n\n" + "\n\n".join(tool_blocks)
 
-        return response
+            # 3. Call Ollama via the parent's implementation.
+            response = await self._ollama_chat(full_msg)
+
+            # 4. Update conversation history (mirror Agent.handle).
+            self._history.append({"role": "user", "content": text})
+            self._history.append({"role": "assistant", "content": response})
+            if len(self._history) > self.config.memory_max_history:
+                self._history = self._history[-self.config.memory_max_history:]
+
+            return response
+
+    return PatrickAgent
 
 
 def main():
@@ -71,8 +79,10 @@ def main():
 
     agent_dir = Path(args.dir)
 
-    # If --channel overrides, edit the loaded config in memory only.
+    # Imports below depend on local-agent-kit being installed (pip install -e .).
+    PatrickAgent = _build_patrick_agent_cls()
     from local_agent_kit.agent import load_config
+
     config = load_config(agent_dir)
     if args.channel:
         config.channel = args.channel
@@ -85,8 +95,8 @@ def main():
         from local_agent_kit.channels.cli_channel import CLIChannel
         channel = CLIChannel(agent_name=config.name)
 
-    # Pick a search provider (Patrick's tool router covers web_search separately,
-    # so we leave the kit's built-in search off to avoid double-calling).
+    # Patrick's tool router covers web_search separately, so we leave the
+    # kit's built-in search off to avoid double-calling.
     agent = PatrickAgent(config=config, channel=channel, search=None)
 
     print(f"Starting {config.name} ({config.model}) on {config.channel}...")

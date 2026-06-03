@@ -34,7 +34,7 @@ Selective cloud escalation covers what the local model can't: web search (Gemini
 ```
 User message (Telegram or CLI)
     ↓
-Pattern-Matched Tool Router (~50 regex patterns, priority-ordered)
+Pattern-Matched Tool Router (~40 regex patterns, priority-ordered)
     ↓                              ↓
 [Tool triggers]              [No tool needed]
     ↓                              ↓
@@ -47,7 +47,7 @@ Local LLM (Ollama) responds with real data
 
 **Key design decisions:**
 
-- **Pattern matching, not intelligence.** The tool router is ~50 regex patterns, not an LLM deciding which tool to use. Deterministic, testable, fast. Doesn't scale past ~20 tools without migrating to intent classification.
+- **Pattern matching, not intelligence.** The tool router is ~40 regex patterns, not an LLM deciding which tool to use. Deterministic, testable, fast. Doesn't scale past ~20 tools without migrating to intent classification.
 - **Inline injection, not history injection.** Tool results are appended directly to the user message. A 12B model treats `[SYSTEM DATA]` placed in earlier history turns as stale context — inline injection is impossible to miss.
 - **Local brain, cloud hands.** The LLM runs locally. Web search and file writes escalate to Gemini. You can disable cloud tools and operate fully local.
 - **Model-agnostic.** Swap the model, run the eval, keep the winner.
@@ -71,7 +71,7 @@ Plus three infra modules: `tool_router` (the dispatcher), `telemetry` (JSONL aud
 
 Every change gets a number. The eval harness is `eval/eval_agent.py` — Karpathy autoresearch pattern: **immutable scorer, modifiable config, single scalar metric.** You (or the optimization loop) cannot modify the scorer; you can only tune what's around it.
 
-- **Failure taxonomy:** weighted penalties for `fake_number`, `fake_browse`, `fake_action`, `rag_pollution`, `wrong_domain`, `verbal_tic`, `stuck_topic`, `constraint_fail`. Specific string markers are observed gemma3:12b fabrications — extend with your own.
+- **Failure taxonomy:** weighted penalties for `fake_number`, `fake_browse`, `fake_action`, `rag_pollution`, `wrong_domain`, `irrelevant`, `verbal_tic`, `stuck_topic`, `constraint_fail`. Specific string markers are observed gemma3:12b fabrications — extend with your own.
 - **Synonym-aware constraint checking:** `+local-first` matches "sovereign", "on-device", "no cloud". Penalizes meaning, not literal strings.
 - **Promptfoo provider:** `eval/promptfoo_provider.py` runs the same pipeline (router → injection → Ollama) so Promptfoo's `llm-rubric` semantic grading hits what users actually experience.
 
