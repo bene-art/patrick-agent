@@ -86,6 +86,22 @@ ISSUE_WEIGHTS = {
 }
 
 
+# Per-model sampling — each model gets its recommended params so cross-model
+# comparisons aren't handicapped by a single hardcoded temperature.
+SAMPLING_BY_MODEL_PREFIX = {
+    "gemma4": {"temperature": 1.0, "think": False},
+    "gemma3": {"temperature": 0.7},
+}
+DEFAULT_SAMPLING = {"temperature": 0.4}
+
+
+def _sampling_for(model: str) -> dict:
+    for prefix, params in SAMPLING_BY_MODEL_PREFIX.items():
+        if model.startswith(prefix):
+            return params
+    return DEFAULT_SAMPLING
+
+
 # ---------------------------------------------------------------------------
 # Taxonomy detector — scores a single response
 # ---------------------------------------------------------------------------
@@ -286,12 +302,15 @@ async def _patrick_chat(
         messages.extend(history)
     messages.append({"role": "user", "content": full_msg})
 
+    sampling = _sampling_for(model)
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": 0.4, "num_predict": max_tokens},
+        "options": {"temperature": sampling["temperature"], "num_predict": max_tokens},
     }
+    if "think" in sampling:
+        payload["think"] = sampling["think"]
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
