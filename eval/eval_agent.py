@@ -86,11 +86,14 @@ ISSUE_WEIGHTS = {
 }
 
 
-# Per-model sampling — each model gets its recommended params so cross-model
-# comparisons aren't handicapped by a single hardcoded temperature.
+# Per-model sampling. Anything not listed falls through to DEFAULT_SAMPLING,
+# which preserves the legacy temp=0.4 behavior — so gemma3 and other models
+# remain unchanged. New entries here are adapted configs for fair comparison.
 SAMPLING_BY_MODEL_PREFIX = {
-    "gemma4": {"temperature": 1.0, "think": False},
-    "gemma3": {"temperature": 0.7},
+    # Adapted Patrick config for gemma4 12B-MLX on Mac mini M4 (16GB unified).
+    # temp=1.0 per Google's card; think=false for latency; num_ctx=8192 caps
+    # the KV cache so total memory (weights ~10GB + KV ~0.5GB) leaves headroom.
+    "gemma4": {"temperature": 1.0, "think": False, "num_ctx": 8192},
 }
 DEFAULT_SAMPLING = {"temperature": 0.4}
 
@@ -303,11 +306,17 @@ async def _patrick_chat(
     messages.append({"role": "user", "content": full_msg})
 
     sampling = _sampling_for(model)
+    options: dict[str, Any] = {
+        "temperature": sampling["temperature"],
+        "num_predict": max_tokens,
+    }
+    if "num_ctx" in sampling:
+        options["num_ctx"] = sampling["num_ctx"]
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": sampling["temperature"], "num_predict": max_tokens},
+        "options": options,
     }
     if "think" in sampling:
         payload["think"] = sampling["think"]
