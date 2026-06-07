@@ -312,14 +312,27 @@ async def _patrick_chat(
     }
     if "num_ctx" in sampling:
         options["num_ctx"] = sampling["num_ctx"]
+
+    # One-off experiment knobs (env-var only, no registry change):
+    #   PATRICK_EVAL_THINK=true|false       — override the per-model think setting
+    #   PATRICK_EVAL_NUM_PREDICT=<int>      — override num_predict (e.g. raise for think:true so
+    #                                         thinking doesn't consume the entire content budget)
+    np_override = os.environ.get("PATRICK_EVAL_NUM_PREDICT")
+    if np_override:
+        options["num_predict"] = int(np_override)
+
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
         "options": options,
     }
-    if "think" in sampling:
-        payload["think"] = sampling["think"]
+    think_val = sampling.get("think")
+    think_override = os.environ.get("PATRICK_EVAL_THINK")
+    if think_override is not None:
+        think_val = think_override.lower() == "true"
+    if think_val is not None:
+        payload["think"] = think_val
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
