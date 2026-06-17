@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/bene-art/patrick-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/bene-art/patrick-agent/actions/workflows/ci.yml)
 
+> **Status:** Reference implementation accompanying the Patrick Operations white paper. Snapshots tagged at design decisions; not maintained for general use. For the reusable kit underneath, see [local-agent-kit](https://github.com/bene-art/local-agent-kit). Security reports via [SECURITY.md](./SECURITY.md).
+
 A local-first AI agent reference implementation. Six tools, an immutable-scorer eval harness, ~15–18 tokens/sec inference on a Mac mini. Built on [local-agent-kit](https://github.com/bene-art/local-agent-kit). Everything runs on your hardware — no API billing, no rate limits, no data leaving the machine for core inference.
 
 ## What a local agent on consumer hardware can do
