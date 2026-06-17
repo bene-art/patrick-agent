@@ -24,7 +24,7 @@ One-liner: "Execute. Verify. Log."
 ### Architecture
 
 - **Tech stack**: Python, SQLite, Ollama (local LLMs — [YOUR_MODEL] for the agent, smaller models for sub-agents). Gemini for cloud LLM fallback.
-- **Retrieval**: FTS5 + QueryRouter. FAISS as fallback.
+- **Retrieval**: FTS5 + QueryRouter.
 - **Scheduling**: All jobs via launchd (macOS) or cron (Linux).
 - **Communication**: Telegram (primary), delivered via structured briefing.
 - **Data**: SQLite databases. All local, no cloud storage.

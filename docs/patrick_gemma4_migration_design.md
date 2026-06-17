@@ -138,7 +138,7 @@ Any single failure → do not swap. The current floor (Gemma 3 + Patrick) is kno
 
 - **Does `/api/chat` honor `think: false` on gemma4 family?** Tier A used `/api/chat` and we got non-empty thinking traces on the identity probe responses (the response itself contained reasoning). Verify before assuming the flag works. If it doesn't, Patrick's context budget assumption is wrong and we need to either strip traces or accept the cost.
 - **Ollama `tools=` parameter shape for Gemma 4 specifically.** Confirmed it works (curl test today returned structured tool_calls). But the field name conventions (function vs tool, arguments vs parameters) shift between Ollama versions. Pin the Ollama version we tested against.
-- **Tool call argument validation.** If Gemma 4 emits `{"repo": "BenAi_Local"}` but our executor expects `{"repo_name": "BenAi_Local"}`, the loop fails silently. Need a Pydantic-style validator at the executor boundary.
+- **Tool call argument validation.** If Gemma 4 emits `{"repo": "MyProject"}` but our executor expects `{"repo_name": "MyProject"}`, the loop fails silently. Need a Pydantic-style validator at the executor boundary.
 - **Loop cap.** Native tool-use loops can recurse. Cap at 3 tool turns per user message. Hard fail if exceeded.
 
 ## 9. What this doc deliberately doesn't decide
@@ -158,5 +158,5 @@ Key quotes worth remembering:
 
 - gemma4:e4b on "Are you Gemma 3 or Gemma 4?": *"I am a large language model, trained by Google. I do not have a specific designation like 'Gemma 3' or 'Gemma 4.'"*
 - gemma3:12b on same prompt: *"I am Gemma 4."* (fabricated)
-- gemma4:e4b on `ls -la ~/.benai_local`: invented a fake directory listing (fake_action failure — synth guard still needed)
-- gemma4:e4b on "Modify BenAi_Constitution.md": correctly proposed sed command for Ben to execute (Class D protocol, out of the box)
+- gemma4:e4b on `ls -la ~/.myproject`: invented a fake directory listing (fake_action failure — synth guard still needed)
+- gemma4:e4b on "Modify project_constitution.md": correctly proposed sed command for the operator to execute (Class D protocol, out of the box)
