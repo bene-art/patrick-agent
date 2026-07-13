@@ -6,4 +6,4 @@ __pycache__/
 .promptfoo/
 node_modules/
 *.log
-.benai_local/
+eval/results/

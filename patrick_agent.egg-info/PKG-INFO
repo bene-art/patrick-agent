@@ -1,0 +1,225 @@
+Metadata-Version: 2.4
+Name: patrick-agent
+Version: 0.2.0
+Summary: A local-first AI agent reference implementation built on local-agent-kit. Six tools, Karpathy-style eval, runs on consumer hardware.
+Author-email: bene-art <bene-art@users.noreply.github.com>
+License: MIT
+Project-URL: Homepage, https://github.com/bene-art/patrick-agent
+Project-URL: Kit, https://github.com/bene-art/local-agent-kit
+Project-URL: WhitePaper, https://github.com/bene-art/patrick-agent/blob/main/docs/white_paper_v2.md
+Keywords: ai,agent,local,ollama,eval,telegram,sovereign,patrick
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: local-agent-kit @ git+https://github.com/bene-art/local-agent-kit@main
+Requires-Dist: aiohttp>=3.9
+Requires-Dist: httpx>=0.27
+Requires-Dist: requests>=2.31
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Dynamic: license-file
+
+# Patrick Agent
+
+[![CI](https://github.com/bene-art/patrick-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/bene-art/patrick-agent/actions/workflows/ci.yml)
+
+> **Status:** Reference implementation accompanying the Patrick Operations white paper. Snapshots tagged at design decisions; not maintained for general use. For the reusable kit underneath, see [local-agent-kit](https://github.com/bene-art/local-agent-kit). Security reports via [SECURITY.md](./SECURITY.md).
+
+A local-first AI agent reference implementation. Six tools, an immutable-scorer eval harness, ~15–18 tokens/sec inference on a Mac mini. Built on [local-agent-kit](https://github.com/bene-art/local-agent-kit). Everything runs on your hardware — no API billing, no rate limits, no data leaving the machine for core inference.
+
+## What a local agent on consumer hardware can do
+
+A 12-billion-parameter model on an Apple M4 with 16 GB of RAM is enough to run a real agent — not a chatbot, an *agent* that reads files, queries databases, calls APIs, runs shell commands, and searches the web. What Patrick demonstrates at the consumer-hardware tier:
+
+- **Tool-augmented chat that knows real things.** A pattern-matched router dispatches to six tools *before* the LLM sees a message; results are injected as `[SYSTEM DATA]` so the model answers with real data instead of hallucinating. *"What's my Alpaca portfolio doing?"* → `api_call` → real numbers in the reply.
+- **Multi-tool chaining in a single turn.** One message can fire multiple tools in parallel. *"Compare my positions with yesterday's picks"* → `api_call` + `db_query` → both results injected → one coherent answer.
+- **System administration by chat.** Allowlisted read-only commands (`ollama ps`, `df -h`, `vm_stat`, `git log`, `launchctl list`, `lsof -iTCP`) let you check system health by texting your agent. No SSH, no dashboard — just ask.
+- **Cloud-escalated function calling without giving up local inference.** gemma3:12b doesn't natively support tool calling, so file writes escalate to Gemini Flash for the function call while the local model stays in charge of conversation. **Local brain, cloud hands.**
+- **Rigorous evaluation on a laptop.** Karpathy autoresearch pattern — immutable scorer + modifiable config + single scalar metric. Iterate on prompts, swap models, measure every change. No eval-service infrastructure required.
+- **Production telemetry that feeds back into the eval corpus.** Every tool invocation logs as JSONL; misses and failures become test cases automatically.
+- **Pluggable channels.** CLI for local use, Telegram for remote — same agent, swap the channel in `agent.yaml`.
+- **Conversation memory that survives restarts.** SQLite-backed per-thread history; the agent picks up where it left off after a reboot or hardware change.
+
+**What it costs:** $0 in API billing for core conversation. Web search and file writes use Gemini Flash's free tier (15 RPM, 1M TPM). The only running cost is electricity (~$5–10/month for a 24/7 Mac mini).
+
+**What it doesn't do (yet):** GPT-4-tier multi-step planning. 20+ tools without an intent classifier. Replace frontier models when you genuinely need synthesis across domains. The 12B class is the *floor* for usable agents — below that, models echo data but can't compose it.
+
+## The technical thesis
+
+LLM inference is **memory-bandwidth bound**. A 12B model at Q4 quantization is ~6 GB on disk. To generate one token, the GPU reads the entire 6 GB from memory. On Apple Silicon's unified memory architecture (M4, ~120 GB/s shared bandwidth), this yields ~15–18 tokens/second — a 300-token response in ~20 seconds.
+
+This is physics, not software. The speed of electrons through the memory bus determines response latency. But it also means: **no API billing, no rate limits, no vendor lock-in, and no conversation data leaving your machine.**
+
+Selective cloud escalation covers what the local model can't: web search (Gemini + Google Search grounding), file writes (Gemini function calling), eval grading (Gemini-as-judge). Everything else — conversation, database queries, file reads, shell commands, API calls — runs locally.
+
+## Architecture
+
+```
+User message (Telegram or CLI)
+    ↓
+Pattern-Matched Tool Router (~40 regex patterns, priority-ordered)
+    ↓                              ↓
+[Tool triggers]              [No tool needed]
+    ↓                              ↓
+Execute tool(s)              Skip to LLM
+    ↓
+Inject [SYSTEM DATA] inline into user message
+    ↓
+Local LLM (Ollama) responds with real data
+```
+
+**Key design decisions:**
+
+- **Pattern matching, not intelligence.** The tool router is ~40 regex patterns, not an LLM deciding which tool to use. Deterministic, testable, fast. Doesn't scale past ~20 tools without migrating to intent classification.
+- **Inline injection, not history injection.** Tool results are appended directly to the user message. A 12B model treats `[SYSTEM DATA]` placed in earlier history turns as stale context — inline injection is impossible to miss.
+- **Local brain, cloud hands.** The LLM runs locally. Web search and file writes escalate to Gemini. You can disable cloud tools and operate fully local.
+- **Model-agnostic.** Swap the model, run the eval, keep the winner.
+
+## Six Tools
+
+| Tool | What it does | Cloud? | Risk |
+|------|-------------|--------|------|
+| **Web search** | Gemini Flash + Google Search grounding | Yes | safe |
+| **Database read** | Read-only SQLite queries (SELECT only, `PRAGMA query_only` enforced) | No | safe |
+| **File read** | Read reports, configs, logs from scoped directories | No | safe |
+| **File write** | Cloud-escalated via Gemini function calling, scoped directory | Yes | low |
+| **Shell exec** | Allowlisted read-only commands (no restarts, no kills) | No | safe |
+| **API call** | External service queries (Alpaca, The Odds API), read-only | No | safe |
+
+Plus three infra modules: `tool_router` (the dispatcher), `telemetry` (JSONL audit log that feeds the eval corpus), and `conversation_memory` (SQLite-backed per-thread history).
+
+**Tool chaining:** A single message can trigger multiple tools simultaneously. *"Check my Alpaca positions and compare with yesterday's picks"* fires `api_call` + `db_query`, injects both as separate `[SYSTEM DATA]` blocks.
+
+## Eval system
+
+Every change gets a number. The eval harness is `eval/eval_agent.py` — Karpathy autoresearch pattern: **immutable scorer, modifiable config, single scalar metric.** You (or the optimization loop) cannot modify the scorer; you can only tune what's around it.
+
+- **Failure taxonomy:** weighted penalties for `fake_number`, `fake_browse`, `fake_action`, `rag_pollution`, `wrong_domain`, `irrelevant`, `verbal_tic`, `stuck_topic`, `constraint_fail`. Specific string markers are observed gemma3:12b fabrications — extend with your own.
+- **Synonym-aware constraint checking:** `+local-first` matches "sovereign", "on-device", "no cloud". Penalizes meaning, not literal strings.
+- **Promptfoo provider:** `eval/promptfoo_provider.py` runs the same pipeline (router → injection → Ollama) so Promptfoo's `llm-rubric` semantic grading hits what users actually experience.
+
+```bash
+python3 eval/eval_agent.py --quick           # 10-entry smoke test
+python3 eval/eval_agent.py                   # full corpus
+python3 eval/eval_agent.py --model gemma3:27b
+```
+
+You bring the eval corpus (`eval/patrick_eval_full.jsonl`). The `synthetic_dataset.py` generator produces a starting set; the high-signal subset that survives pruning is what you'll actually iterate against.
+
+## Hardware
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU/GPU | Apple M1 | Apple M4 |
+| Memory | 16 GB unified | 24 GB unified |
+| Storage | 20 GB free | SSD/NVMe |
+| OS | macOS 13+ | macOS 15+ |
+
+**Why Apple Silicon:** Unified Memory Architecture — CPU and GPU share the same memory pool. No PCIe bottleneck, no VRAM capacity wall. A 12B Q4 model fits in 9.5 GB; the GPU reads it directly without copying.
+
+**Also works on:** Linux with NVIDIA GPU (12+ GB VRAM) via Ollama. Not tested but architecturally compatible.
+
+## Quick start
+
+```bash
+# 1. Install Ollama + pull the model
+brew install ollama
+ollama pull gemma3:12b
+
+# 2. Clone + install
+git clone https://github.com/bene-art/patrick-agent
+cd patrick-agent
+pip install -e .                  # installs patrick_agent + local-agent-kit + deps
+
+# 3. Configure
+cp .env.example .env
+# Edit .env with API keys you want enabled (Gemini, Telegram, Alpaca, Odds API)
+# Edit identity/IDENTITY.md with your agent's name and domain context
+
+# 4. Generate the starter eval corpus
+python3 eval/synthetic_dataset.py
+
+# 5. Smoke-test the pipeline (10 random entries through your local model)
+python3 eval/eval_agent.py --quick
+
+# 6. Start the agent (CLI by default; set channel: telegram in agent.yaml for TG)
+python3 scripts/run_patrick.py
+```
+
+## Project structure
+
+```
+patrick-agent/
+├── pyproject.toml          # pip install -e .  → installs patrick_agent + deps
+├── agent.yaml              # Kit config: model, channel, memory
+├── identity/
+│   ├── IDENTITY.md         # Who the agent is (template — customize this)
+│   └── SOUL.md             # Operating modes + hard constraints (template)
+├── patrick_agent/          # The importable package
+│   ├── __init__.py
+│   ├── tools/              # Six routable tools + 3 infra modules + 1 helper
+│   │   ├── tool_router.py  # Pattern-matched dispatcher + chaining
+│   │   ├── web_search.py   # Wraps local_agent_kit.search.GeminiSearch
+│   │   ├── db_query.py     # Read-only SQLite (config-driven allowlist)
+│   │   ├── file_read.py    # Scoped file access + write
+│   │   ├── cloud_write.py  # Gemini function calling for writes
+│   │   ├── shell_exec.py   # Allowlisted read-only commands
+│   │   ├── api_call.py     # Direct Alpaca + Odds API REST
+│   │   ├── telemetry.py    # JSONL tool-use audit log
+│   │   ├── conversation_memory.py  # SQLite-backed per-thread history
+│   │   └── gemini_chat.py  # Minimal Gemini Flash chat for cloud escalation
+│   └── notify/
+│       ├── formatter.py    # Tier 2 (reports) / Tier 3 (alerts)
+│       ├── telegram.py     # Direct Telegram Bot API send
+│       └── base.py         # Channel ABC + Severity enum
+├── eval/
+│   ├── eval_agent.py       # Immutable scorer + failure taxonomy
+│   ├── promptfoo_provider.py   # Full-pipeline Promptfoo provider
+│   └── synthetic_dataset.py    # Test case generator
+├── scripts/
+│   ├── run_patrick.py      # Main entry point — wires kit + tool router
+│   └── nightly_eval.py     # Regression-detection template
+├── tests/
+│   └── test_smoke.py       # Import + dispatcher smoke tests
+├── docs/
+│   └── white_paper_v2.md   # Technical white paper
+├── requirements.txt        # Loose alternative to pyproject for non-package use
+├── .env.example
+├── LICENSE                 # MIT
+└── README.md
+```
+
+## Lessons learned building this
+
+1. **The system prompt is the main problem, not the model.** Early SOUL.md literally said "ask 'Want me to break that down?'" — the model did it 50.6% of the time. One deletion, zero instances.
+2. **Dense prompts hurt small models.** 246 lines of instructions → 84 lines. Faster AND more accurate.
+3. **Inline injection, not history injection.** 12B models treat separate history entries as stale context. `[SYSTEM DATA]` appended to the current user message is consistently used.
+4. **IDENTITY.md must match the tools.** Build tools but forget to update the system prompt? The agent deflects every tool-enabled query until you tell it about its own capabilities.
+5. **Keyword matching punishes good answers.** Use semantic grading (`llm-rubric`) for quality; literal matching for guardrails only.
+6. **Per-model `keep_alive` prevents GPU eviction.** Global `keep_alive` pins ALL models. Per-model pins only the primary, letting specialists load and release.
+7. **Negative IDENTITY clauses don't stop fabrication at 12B.** Telling the model "do NOT make up numbers" doesn't work as well as guarding at the tool / synthesizer layer. Catch fabrication in the scorer; prevent it in the data path.
+8. **Measure before shipping.** The Karpathy loop (immutable scorer + modifiable config + single metric) turns prompt engineering from vibes into science.
+
+## Honesty notes
+
+Things this project claims or implies that aren't fully true:
+
+1. **The reported scores are time-stamped, not eternal.** Eval corpus + scorer + model interact; treat any single number as "approximately this on that date" rather than the truth.
+2. **Self-improvement infrastructure is deployed but hasn't produced automated promotions.** Nightly eval is currently disabled.
+3. **"Routing" is regex, not intelligence.** Natural phrasing that doesn't match a pattern fails silently.
+4. **File writes are done by Gemini, not the local model.** The agent dispatches writes; it doesn't author them.
+5. **The eval has author bias.** Written by the same person who wrote the system prompt and tool patterns.
+6. **Conversation memory exists; the model doesn't always use it.** 12B context window is finite.
+7. **"Zero cost" applies to compute only.** Electricity, internet, and engineering time are real costs.
+8. **Tool chaining is coincidental, not designed.** It works when regex patterns independently match both needs.
+9. **The 12B model can't do complex multi-step reasoning.** It echoes data well; cross-domain synthesis at frontier-model quality requires a larger model.
+
+## License
+
+MIT.
