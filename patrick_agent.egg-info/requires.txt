@@ -1,4 +1,4 @@
-local-agent-kit @ git+https://github.com/bene-art/local-agent-kit@main
+local-agent-kit @ git+https://github.com/bene-art/local-agent-kit@v0.4.0
 aiohttp>=3.9
 httpx>=0.27
 requests>=2.31

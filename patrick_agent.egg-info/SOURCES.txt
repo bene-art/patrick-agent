@@ -7,6 +7,8 @@ patrick_agent.egg-info/SOURCES.txt
 patrick_agent.egg-info/dependency_links.txt
 patrick_agent.egg-info/requires.txt
 patrick_agent.egg-info/top_level.txt
+patrick_agent/channels/__init__.py
+patrick_agent/channels/telegram_channel.py
 patrick_agent/notify/__init__.py
 patrick_agent/notify/base.py
 patrick_agent/notify/formatter.py

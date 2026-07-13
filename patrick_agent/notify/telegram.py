@@ -2,7 +2,7 @@
 
 For one-shot notifications (alerts, morning briefs). For full
 conversational message loops, use
-`local_agent_kit.channels.telegram_channel.TelegramChannel` instead.
+`patrick_agent.channels.telegram_channel.TelegramListenerChannel`.
 
 Requires:
     PAT_TG_BOT_TOKEN  Telegram bot token (from @BotFather).

@@ -49,6 +49,31 @@ def test_formatter_produces_expected_shape():
     assert "Restart service" in alert
 
 
+def test_vendored_channel_requires_token(monkeypatch):
+    from patrick_agent.channels.telegram_channel import TelegramListenerChannel
+
+    monkeypatch.delenv("PAT_TG_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TG_BOT_TOKEN", raising=False)
+    try:
+        TelegramListenerChannel()
+        raise AssertionError("expected ValueError without a bot token")
+    except ValueError:
+        pass
+    ch = TelegramListenerChannel(bot_token="fake", chat_id=123)
+    assert ch.chat_id == 123
+
+
+def test_vendored_web_search_fails_loudly_without_key(monkeypatch):
+    """Self-contained since kit v0.4.0 — must return an error envelope,
+    not raise, when no Gemini key is configured."""
+    from patrick_agent.tools.web_search import web_search
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    result = asyncio.run(web_search("test query"))
+    assert result.startswith("[web search error:")
+
+
 def test_route_tools_handles_empty_message():
     """The router must not crash on innocuous input even when no API keys are set."""
     from patrick_agent.tools.tool_router import route_tools

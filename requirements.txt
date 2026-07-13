@@ -2,10 +2,12 @@
 #
 # Install: pip install -r requirements.txt
 #
-# Pin to a tagged release of local-agent-kit once one ships; for now we
-# track the main branch.
+# Pinned to the kit's v0.4.0 tag — this repo is a working snapshot and
+# must not break when the kit's main branch evolves. Cloud search and
+# Telegram are vendored in patrick_agent/ (the kit dropped both in
+# v0.4.0 to stay zero-cloud-account).
 
-local-agent-kit @ git+https://github.com/bene-art/local-agent-kit@main
+local-agent-kit @ git+https://github.com/bene-art/local-agent-kit@v0.4.0
 
 # HTTP — for Telegram, Gemini, Alpaca, Odds API.
 aiohttp>=3.9

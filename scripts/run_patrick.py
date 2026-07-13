@@ -56,11 +56,13 @@ def _build_patrick_agent_cls():
             # 3. Call Ollama via the parent's implementation.
             response = await self._ollama_chat(full_msg)
 
-            # 4. Update conversation history (mirror Agent.handle).
-            self._history.append({"role": "user", "content": text})
-            self._history.append({"role": "assistant", "content": response})
-            if len(self._history) > self.config.memory_max_history:
-                self._history = self._history[-self.config.memory_max_history:]
+            # 4. Update conversation history (mirror Agent.handle,
+            #    including the kit's conversation_memory.enabled gate).
+            if self.config.memory_enabled:
+                self._history.append({"role": "user", "content": text})
+                self._history.append({"role": "assistant", "content": response})
+                if len(self._history) > self.config.memory_max_history:
+                    self._history = self._history[-self.config.memory_max_history:]
 
             return response
 
@@ -69,8 +71,8 @@ def _build_patrick_agent_cls():
 
 def main():
     parser = argparse.ArgumentParser(description="Run Patrick — the reference agent.")
-    parser.add_argument("--channel", choices=["cli", "telegram"],
-                        help="Override channel from agent.yaml")
+    parser.add_argument("--channel", choices=["cli", "telegram"], default="cli",
+                        help="Communication channel (default: cli)")
     parser.add_argument("--dir", default=str(REPO_ROOT),
                         help="Patrick repo / agent directory")
     args = parser.parse_args()
@@ -84,13 +86,11 @@ def main():
     from local_agent_kit.agent import load_config
 
     config = load_config(agent_dir)
-    if args.channel:
-        config.channel = args.channel
 
-    # Pick channel from (possibly overridden) config.
-    if config.channel == "telegram":
-        from local_agent_kit.channels.telegram_channel import TelegramChannel
-        channel = TelegramChannel()
+    # Channels are code-level since kit v0.4.0 (no `channel:` config key).
+    if args.channel == "telegram":
+        from patrick_agent.channels.telegram_channel import TelegramListenerChannel
+        channel = TelegramListenerChannel()
     else:
         from local_agent_kit.channels.cli_channel import CLIChannel
         channel = CLIChannel(agent_name=config.name)
@@ -99,7 +99,7 @@ def main():
     # kit's built-in search off to avoid double-calling.
     agent = PatrickAgent(config=config, channel=channel, search=None)
 
-    print(f"Starting {config.name} ({config.model}) on {config.channel}...")
+    print(f"Starting {config.name} ({config.model}) on {args.channel}...")
     try:
         asyncio.run(agent.run())
     except KeyboardInterrupt:
