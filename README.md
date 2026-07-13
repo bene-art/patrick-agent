@@ -11,13 +11,12 @@ A local-first AI agent reference implementation. Six tools, an immutable-scorer 
 A 12-billion-parameter model on an Apple M4 with 16 GB of RAM is enough to run a real agent — not a chatbot, an *agent* that reads files, queries databases, calls APIs, runs shell commands, and searches the web. What Patrick demonstrates at the consumer-hardware tier:
 
 - **Tool-augmented chat that knows real things.** A pattern-matched router dispatches to six tools *before* the LLM sees a message; results are injected as `[SYSTEM DATA]` so the model answers with real data instead of hallucinating. *"What's my Alpaca portfolio doing?"* → `api_call` → real numbers in the reply.
-- **Multi-tool chaining in a single turn.** One message can fire multiple tools in parallel. *"Compare my positions with yesterday's picks"* → `api_call` + `db_query` → both results injected → one coherent answer.
+- **Multi-tool chaining in a single turn.** One message can fire multiple tools (sequentially). *"Compare my positions with yesterday's picks"* → `api_call` + `db_query` → both results injected → one coherent answer.
 - **System administration by chat.** Allowlisted read-only commands (`ollama ps`, `df -h`, `vm_stat`, `git log`, `launchctl list`, `lsof -iTCP`) let you check system health by texting your agent. No SSH, no dashboard — just ask.
 - **Cloud-escalated function calling without giving up local inference.** gemma3:12b doesn't natively support tool calling, so file writes escalate to Gemini Flash for the function call while the local model stays in charge of conversation. **Local brain, cloud hands.**
 - **Rigorous evaluation on a laptop.** Karpathy autoresearch pattern — immutable scorer + modifiable config + single scalar metric. Iterate on prompts, swap models, measure every change. No eval-service infrastructure required.
-- **Production telemetry that feeds back into the eval corpus.** Every tool invocation logs as JSONL; misses and failures become test cases automatically.
-- **Pluggable channels.** CLI for local use, Telegram for remote — same agent, swap the channel in `agent.yaml`.
-- **Conversation memory that survives restarts.** SQLite-backed per-thread history; the agent picks up where it left off after a reboot or hardware change.
+- **Production telemetry as a JSONL audit log.** Every tool invocation and skip is logged — the raw material for growing the eval corpus (curation is manual; see honesty notes).
+- **Pluggable channels.** CLI for local use, Telegram for remote (vendored long-polling listener) — same agent, pick with `run_patrick.py --channel`.
 
 **What it costs:** $0 in API billing for core conversation. Web search and file writes use Gemini Flash's free tier (15 RPM, 1M TPM). The only running cost is electricity (~$5–10/month for a 24/7 Mac mini).
 
@@ -65,9 +64,9 @@ Local LLM (Ollama) responds with real data
 | **Shell exec** | Allowlisted read-only commands (no restarts, no kills) | No | safe |
 | **API call** | External service queries (Alpaca, The Odds API), read-only | No | safe |
 
-Plus three infra modules: `tool_router` (the dispatcher), `telemetry` (JSONL audit log that feeds the eval corpus), and `conversation_memory` (SQLite-backed per-thread history).
+Plus two infra modules: `tool_router` (the dispatcher) and `telemetry` (JSONL tool-use audit log).
 
-**Tool chaining:** A single message can trigger multiple tools simultaneously. *"Check my Alpaca positions and compare with yesterday's picks"* fires `api_call` + `db_query`, injects both as separate `[SYSTEM DATA]` blocks.
+**Tool chaining:** A single message can trigger multiple tools in one turn. *"Check my Alpaca positions and compare with yesterday's picks"* fires `api_call` + `db_query`, injects both as separate `[SYSTEM DATA]` blocks.
 
 ## Eval system
 
@@ -75,7 +74,6 @@ Every change gets a number. The eval harness is `eval/eval_agent.py` — Karpath
 
 - **Failure taxonomy:** weighted penalties for `fake_number`, `fake_browse`, `fake_action`, `rag_pollution`, `wrong_domain`, `irrelevant`, `verbal_tic`, `stuck_topic`, `constraint_fail`. Specific string markers are observed gemma3:12b fabrications — extend with your own.
 - **Synonym-aware constraint checking:** `+local-first` matches "sovereign", "on-device", "no cloud". Penalizes meaning, not literal strings.
-- **Promptfoo provider:** `eval/promptfoo_provider.py` runs the same pipeline (router → injection → Ollama) so Promptfoo's `llm-rubric` semantic grading hits what users actually experience.
 
 ```bash
 python3 eval/eval_agent.py --quick           # 10-entry smoke test
@@ -121,7 +119,7 @@ python3 eval/synthetic_dataset.py
 # 5. Smoke-test the pipeline (10 random entries through your local model)
 python3 eval/eval_agent.py --quick
 
-# 6. Start the agent (CLI by default; set channel: telegram in agent.yaml for TG)
+# 6. Start the agent (CLI by default; --channel telegram for TG)
 python3 scripts/run_patrick.py
 ```
 
@@ -130,34 +128,35 @@ python3 scripts/run_patrick.py
 ```
 patrick-agent/
 ├── pyproject.toml          # pip install -e .  → installs patrick_agent + deps
-├── agent.yaml              # Kit config: model, channel, memory
+├── agent.yaml              # Kit config: model, memory, tools
 ├── identity/
 │   ├── IDENTITY.md         # Who the agent is (template — customize this)
 │   └── SOUL.md             # Operating modes + hard constraints (template)
 ├── patrick_agent/          # The importable package
 │   ├── __init__.py
-│   ├── tools/              # Six routable tools + 3 infra modules + 1 helper
+│   ├── tools/              # Six routable tools + 2 infra modules + 1 helper
 │   │   ├── tool_router.py  # Pattern-matched dispatcher + chaining
-│   │   ├── web_search.py   # Wraps local_agent_kit.search.GeminiSearch
+│   │   ├── web_search.py   # Gemini + Google Search grounding (self-contained)
 │   │   ├── db_query.py     # Read-only SQLite (config-driven allowlist)
 │   │   ├── file_read.py    # Scoped file access + write
 │   │   ├── cloud_write.py  # Gemini function calling for writes
 │   │   ├── shell_exec.py   # Allowlisted read-only commands
 │   │   ├── api_call.py     # Direct Alpaca + Odds API REST
 │   │   ├── telemetry.py    # JSONL tool-use audit log
-│   │   ├── conversation_memory.py  # SQLite-backed per-thread history
 │   │   └── gemini_chat.py  # Minimal Gemini Flash chat for cloud escalation
+│   ├── channels/
+│   │   └── telegram_channel.py  # Vendored long-polling conversational channel
 │   └── notify/
 │       ├── formatter.py    # Tier 2 (reports) / Tier 3 (alerts)
 │       ├── telegram.py     # Direct Telegram Bot API send
 │       └── base.py         # Channel ABC + Severity enum
 ├── eval/
 │   ├── eval_agent.py       # Immutable scorer + failure taxonomy
-│   ├── promptfoo_provider.py   # Full-pipeline Promptfoo provider
 │   └── synthetic_dataset.py    # Test case generator
 ├── scripts/
 │   ├── run_patrick.py      # Main entry point — wires kit + tool router
-│   └── nightly_eval.py     # Regression-detection template
+│   ├── nightly_eval.py     # Regression-detection template
+│   └── vocab_scrub.py      # Pre-commit privacy gate (hashed blocklist)
 ├── tests/
 │   └── test_smoke.py       # Import + dispatcher smoke tests
 ├── docs/
@@ -188,7 +187,7 @@ Things this project claims or implies that aren't fully true:
 3. **"Routing" is regex, not intelligence.** Natural phrasing that doesn't match a pattern fails silently.
 4. **File writes are done by Gemini, not the local model.** The agent dispatches writes; it doesn't author them.
 5. **The eval has author bias.** Written by the same person who wrote the system prompt and tool patterns.
-6. **Conversation memory exists; the model doesn't always use it.** 12B context window is finite.
+6. **Conversation memory is in-session only.** History does not survive a restart; the unwired SQLite module that implied otherwise was removed.
 7. **"Zero cost" applies to compute only.** Electricity, internet, and engineering time are real costs.
 8. **Tool chaining is coincidental, not designed.** It works when regex patterns independently match both needs.
 9. **The 12B model can't do complex multi-step reasoning.** It echoes data well; cross-domain synthesis at frontier-model quality requires a larger model.
