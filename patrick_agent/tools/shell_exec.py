@@ -26,7 +26,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+# parents[2]: tools/ → patrick_agent/ → repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 AGENT_REPO_DIR = os.environ.get("AGENT_REPO_DIR", str(_REPO_ROOT))
 LAUNCHD_PREFIX = os.environ.get("LAUNCHD_PREFIX", "")
 

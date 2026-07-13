@@ -23,7 +23,7 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def _api_key() -> str:
-    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
 
 
 async def gemini_chat(
@@ -72,11 +72,13 @@ async def gemini_chat(
     if tools:
         body["tools"] = tools
 
-    url = f"{GEMINI_API_URL}/{model}:generateContent?key={api_key}"
+    # Key goes in a header, not the URL — httpx error messages embed the
+    # full URL, so a query-string key leaks into logs and returned errors.
+    url = f"{GEMINI_API_URL}/{model}:generateContent"
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=body)
+            resp = await client.post(url, json=body, headers={"x-goog-api-key": api_key})
             resp.raise_for_status()
             data = resp.json()
     except Exception as exc:

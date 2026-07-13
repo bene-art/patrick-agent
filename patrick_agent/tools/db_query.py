@@ -24,7 +24,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+# parents[2]: tools/ → patrick_agent/ → repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_PATH = _REPO_ROOT / "config" / "databases.yaml"
 
 # Hard blocklist — never allow these

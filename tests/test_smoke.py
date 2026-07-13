@@ -19,8 +19,8 @@ def test_tool_router_imports():
 
 
 def test_notify_imports():
-    from patrick_agent.notify.base import Channel, Severity, ChannelConfig
-    from patrick_agent.notify.formatter import fmt_report, fmt_alert, should_interrupt
+    from patrick_agent.notify.base import Channel, Severity, ChannelConfig  # noqa: F401
+    from patrick_agent.notify.formatter import fmt_report, fmt_alert, should_interrupt  # noqa: F401
     assert Severity.HIGH.value == "high"
 
 
@@ -47,6 +47,18 @@ def test_formatter_produces_expected_shape():
     assert "Outage" in alert
     assert "Connection refused" in alert
     assert "Restart service" in alert
+
+
+def test_repo_paths_resolve_to_repo_root():
+    """Regression: PATRICK_REPO pointed at the package dir, not the repo
+    root, so identity/ and config/ reads always got access-denied."""
+    from patrick_agent.tools.file_read import PATRICK_REPO, file_read
+
+    identity = PATRICK_REPO / "identity" / "IDENTITY.md"
+    assert identity.exists(), f"repo-root resolution broken: {identity}"
+    result = asyncio.run(file_read("identity/IDENTITY.md"))
+    assert not result.startswith("[access denied"), result
+    assert not result.startswith("[file not found"), result
 
 
 def test_vendored_channel_requires_token(monkeypatch):

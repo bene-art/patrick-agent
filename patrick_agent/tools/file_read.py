@@ -20,7 +20,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 AGENT_DATA_DIR = Path(os.environ.get("AGENT_DATA_DIR", str(Path.home() / ".patrick-agent")))
-PATRICK_REPO = Path(__file__).resolve().parent.parent
+# parents[2]: tools/ → patrick_agent/ → repo root (identity/ and config/
+# live at the repo root, not inside the package).
+PATRICK_REPO = Path(__file__).resolve().parents[2]
 
 # Allowed directory roots — Patrick can read these
 ALLOWED_ROOTS: list[Path] = [
